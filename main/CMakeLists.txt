@@ -1,0 +1,15 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "board_bringup.c"
+        "board_i2c.c"
+        "board_spi.c"
+        "pcf8574.c"
+        "audio_bringup.c"
+        "eink_bringup.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        driver
+        esp_timer
+)
