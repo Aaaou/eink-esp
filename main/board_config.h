@@ -16,8 +16,11 @@
 #define BOARD_I2S_BCLK_GPIO           GPIO_NUM_3
 #define BOARD_I2S_LRCK_GPIO           GPIO_NUM_1
 #define BOARD_I2S_MCLK_GPIO           GPIO_NUM_5
-#define BOARD_I2S_DOUT_GPIO           GPIO_NUM_2
-#define BOARD_I2S_DIN_GPIO            GPIO_NUM_0
+// I2S names below are from the ESP32-C3 controller perspective.
+// ESP DOUT GPIO0 -> ES8311 DSDIN/DIN, used for playback into the codec.
+// ESP DIN  GPIO2 <- ES8311 ASDOUT/DOUT, used for capture from the codec.
+#define BOARD_I2S_DOUT_GPIO           GPIO_NUM_0
+#define BOARD_I2S_DIN_GPIO            GPIO_NUM_2
 #define BOARD_BOOT_BUTTON_GPIO        ((gpio_num_t)CONFIG_AUDIO_RECORD_BUTTON_GPIO)
 
 #define BOARD_EINK_SPI_HOST           SPI2_HOST

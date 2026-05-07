@@ -98,6 +98,14 @@ config AUDIO_RECORD_SAMPLE_RATE
     help
         Sample rate used for I2S capture and WAV export.
 
+config AUDIO_RECORD_I2S_RAW_DIAG
+    bool "Log raw I2S capture diagnostics"
+    default y
+    help
+        Print a short raw I2S frame dump and alternate sample interpretations
+        during recording. This is useful while validating ES8311 slot width,
+        bit alignment, and ADC output on a new board.
+
 config AUDIO_PORTAL_AP_SSID
     string "Audio portal AP SSID"
     default "INK-ESP-AUDIO"

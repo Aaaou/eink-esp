@@ -43,6 +43,12 @@ typedef struct {
     uint32_t data_size;
 } wav_header_t;
 
+typedef struct {
+    int32_t min;
+    int32_t max;
+    uint32_t nonzero;
+} sample_diag_t;
+
 static void wav_header_fill(wav_header_t *header, uint32_t data_size)
 {
     memcpy(header->riff, "RIFF", 4);
@@ -58,6 +64,76 @@ static void wav_header_fill(wav_header_t *header, uint32_t data_size)
     header->bits_per_sample = AUDIO_BITS_PER_SAMPLE;
     memcpy(header->data, "data", 4);
     header->data_size = data_size;
+}
+
+static void sample_diag_update(sample_diag_t *diag, int32_t value)
+{
+    if (value < diag->min) {
+        diag->min = value;
+    }
+    if (value > diag->max) {
+        diag->max = value;
+    }
+    if (value != 0) {
+        ++diag->nonzero;
+    }
+}
+
+static int32_t sign_extend_24(uint32_t value)
+{
+    if ((value & 0x00800000U) != 0) {
+        value |= 0xFF000000U;
+    }
+    return (int32_t)value;
+}
+
+static void audio_log_raw_diag_once(const uint8_t *buffer, size_t bytes_read)
+{
+#if CONFIG_AUDIO_RECORD_I2S_RAW_DIAG
+    sample_diag_t le16 = { .min = INT32_MAX, .max = INT32_MIN };
+    sample_diag_t le16_shift8 = { .min = INT32_MAX, .max = INT32_MIN };
+    sample_diag_t be16 = { .min = INT32_MAX, .max = INT32_MIN };
+    sample_diag_t le24_hi = { .min = INT32_MAX, .max = INT32_MIN };
+    const size_t dump_bytes = (bytes_read < 32) ? bytes_read : 32;
+    char dump[3 * 32 + 1] = { 0 };
+    size_t pos = 0;
+
+    for (size_t i = 0; i < dump_bytes; ++i) {
+        pos += (size_t)snprintf(&dump[pos], sizeof(dump) - pos, "%02X%s", buffer[i], (i + 1 == dump_bytes) ? "" : " ");
+    }
+    ESP_LOGI(TAG, "[DIAG] first %u raw I2S bytes: %s", (unsigned)dump_bytes, dump);
+
+    for (size_t i = 0; (i + 3) < bytes_read; i += 4) {
+        const int16_t l_le16 = (int16_t)((uint16_t)buffer[i] | ((uint16_t)buffer[i + 1] << 8));
+        const int16_t r_le16 = (int16_t)((uint16_t)buffer[i + 2] | ((uint16_t)buffer[i + 3] << 8));
+        const int16_t l_be16 = (int16_t)(((uint16_t)buffer[i] << 8) | (uint16_t)buffer[i + 1]);
+        const int16_t r_be16 = (int16_t)(((uint16_t)buffer[i + 2] << 8) | (uint16_t)buffer[i + 3]);
+        const int32_t l_24 = sign_extend_24(((uint32_t)buffer[i + 1]) | ((uint32_t)buffer[i + 2] << 8) |
+                                            ((uint32_t)buffer[i + 3] << 16));
+
+        sample_diag_update(&le16, l_le16);
+        sample_diag_update(&le16, r_le16);
+        sample_diag_update(&le16_shift8, (int32_t)l_le16 >> 8);
+        sample_diag_update(&le16_shift8, (int32_t)r_le16 >> 8);
+        sample_diag_update(&be16, l_be16);
+        sample_diag_update(&be16, r_be16);
+        sample_diag_update(&le24_hi, l_24 >> 8);
+    }
+
+    ESP_LOGI(TAG, "[DIAG] le16 min=%ld max=%ld nonzero=%lu", (long)le16.min, (long)le16.max, (unsigned long)le16.nonzero);
+    ESP_LOGI(TAG, "[DIAG] le16>>8 min=%ld max=%ld nonzero=%lu",
+        (long)le16_shift8.min,
+        (long)le16_shift8.max,
+        (unsigned long)le16_shift8.nonzero);
+    ESP_LOGI(TAG, "[DIAG] be16 min=%ld max=%ld nonzero=%lu", (long)be16.min, (long)be16.max, (unsigned long)be16.nonzero);
+    ESP_LOGI(TAG, "[DIAG] 24bit-ish min=%ld max=%ld nonzero=%lu",
+        (long)le24_hi.min,
+        (long)le24_hi.max,
+        (unsigned long)le24_hi.nonzero);
+#else
+    (void)buffer;
+    (void)bytes_read;
+#endif
 }
 
 static esp_err_t audio_init_i2s(void)
@@ -232,6 +308,7 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
     uint32_t left_nonzero_count = 0;
     uint32_t right_nonzero_count = 0;
     uint32_t raw_nonzero_bytes = 0;
+    bool raw_diag_logged = false;
 
     while (total_data_bytes < output_bytes_target) {
         const uint32_t output_remaining = output_bytes_target - total_data_bytes;
@@ -244,6 +321,11 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
         if ((err != ESP_OK) || (bytes_read == 0)) {
             fclose(file);
             return (err == ESP_OK) ? ESP_FAIL : err;
+        }
+
+        if (!raw_diag_logged) {
+            audio_log_raw_diag_once(input_buffer, bytes_read);
+            raw_diag_logged = true;
         }
 
         for (size_t i = 0; i < bytes_read; ++i) {
