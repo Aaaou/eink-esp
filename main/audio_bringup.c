@@ -1,6 +1,7 @@
 #include "audio_bringup.h"
 
 #include "board_i2c.h"
+#include "driver/i2c.h"
 #include "driver/i2s_std.h"
 #include "es8311.h"
 #include "esp_check.h"
@@ -26,6 +27,21 @@ static bool s_audio_ready;
 #define AUDIO_INPUT_BLOCK_BYTES 1024
 #define AUDIO_I2S_MCLK_MULTIPLE I2S_MCLK_MULTIPLE_256
 #define AUDIO_I2S_BCLK_DIV 8
+
+#define ES8311_SYSTEM_REG0D 0x0D
+#define ES8311_SYSTEM_REG0E 0x0E
+#define ES8311_SYSTEM_REG14 0x14
+#define ES8311_ADC_REG15 0x15
+#define ES8311_ADC_REG16 0x16
+#define ES8311_ADC_REG17 0x17
+#define ES8311_ADC_REG18 0x18
+#define ES8311_ADC_REG1A 0x1A
+#define ES8311_ADC_REG1B 0x1B
+#define ES8311_ADC_REG1C 0x1C
+
+#define ES8311_BOARD_ANALOG_MIC_REG14 0x1A
+#define ES8311_BOARD_ADC_GAIN_REG16 ((uint8_t)ES8311_MIC_GAIN_30DB)
+#define ES8311_BOARD_ADC_VOLUME_REG17 0xC8
 
 typedef struct {
     char riff[4];
@@ -85,6 +101,32 @@ static int32_t sign_extend_24(uint32_t value)
         value |= 0xFF000000U;
     }
     return (int32_t)value;
+}
+
+static esp_err_t es8311_board_write_reg(uint8_t codec_addr, uint8_t reg, uint8_t value)
+{
+    const uint8_t data[2] = { reg, value };
+    return i2c_master_write_to_device(BOARD_I2C_PORT, codec_addr, data, sizeof(data), pdMS_TO_TICKS(1000));
+}
+
+static esp_err_t audio_apply_es8311_analog_mic_fixup(uint8_t codec_addr)
+{
+#if CONFIG_AUDIO_ES8311_ANALOG_MIC_FIXUP
+    ESP_LOGI(TAG, "[MIC] ES8311 analog Mic1P-Mic1N fixup: REG14=0x%02X REG16=0x%02X REG17=0x%02X",
+        ES8311_BOARD_ANALOG_MIC_REG14,
+        ES8311_BOARD_ADC_GAIN_REG16,
+        ES8311_BOARD_ADC_VOLUME_REG17);
+
+    ESP_RETURN_ON_ERROR(es8311_board_write_reg(codec_addr, ES8311_SYSTEM_REG0D, 0x01), TAG, "ES8311 REG0D failed");
+    ESP_RETURN_ON_ERROR(es8311_board_write_reg(codec_addr, ES8311_SYSTEM_REG0E, 0x02), TAG, "ES8311 REG0E failed");
+    ESP_RETURN_ON_ERROR(es8311_board_write_reg(codec_addr, ES8311_SYSTEM_REG14, ES8311_BOARD_ANALOG_MIC_REG14), TAG, "ES8311 REG14 failed");
+    ESP_RETURN_ON_ERROR(es8311_board_write_reg(codec_addr, ES8311_ADC_REG16, ES8311_BOARD_ADC_GAIN_REG16), TAG, "ES8311 REG16 failed");
+    ESP_RETURN_ON_ERROR(es8311_board_write_reg(codec_addr, ES8311_ADC_REG17, ES8311_BOARD_ADC_VOLUME_REG17), TAG, "ES8311 REG17 failed");
+    ESP_RETURN_ON_ERROR(es8311_board_write_reg(codec_addr, ES8311_ADC_REG1C, 0x6A), TAG, "ES8311 REG1C failed");
+#else
+    (void)codec_addr;
+#endif
+    return ESP_OK;
 }
 
 static void audio_log_raw_diag_once(const uint8_t *buffer, size_t bytes_read)
@@ -222,6 +264,7 @@ static esp_err_t audio_init_codec(uint8_t codec_addr)
     ESP_RETURN_ON_ERROR(es8311_microphone_config(s_codec, false), TAG, "es8311 microphone config failed");
     ESP_RETURN_ON_ERROR(es8311_microphone_gain_set(s_codec, ES8311_MIC_GAIN_30DB), TAG, "es8311 mic gain failed");
     ESP_RETURN_ON_ERROR(es8311_microphone_fade(s_codec, ES8311_FADE_OFF), TAG, "es8311 microphone fade failed");
+    ESP_RETURN_ON_ERROR(audio_apply_es8311_analog_mic_fixup(codec_addr), TAG, "ES8311 analog mic fixup failed");
     ESP_RETURN_ON_ERROR(
         es8311_sample_frequency_config(s_codec, AUDIO_SAMPLE_RATE_HZ * 256, AUDIO_SAMPLE_RATE_HZ),
         TAG,

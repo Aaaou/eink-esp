@@ -106,6 +106,15 @@ config AUDIO_RECORD_I2S_RAW_DIAG
         during recording. This is useful while validating ES8311 slot width,
         bit alignment, and ADC output on a new board.
 
+config AUDIO_ES8311_ANALOG_MIC_FIXUP
+    bool "Apply board-specific ES8311 analog mic register fixup"
+    default y
+    help
+        Explicitly confirm ES8311 analog Mic1P-Mic1N capture registers after
+        the component's generic microphone setup. Register 0x14 uses the ES8311
+        datasheet encoding, where 0x1A means Mic1P-Mic1N with max 30dB analog
+        PGA. Do not map the es8311_mic_gain_t enum directly into register 0x14.
+
 config AUDIO_PORTAL_AP_SSID
     string "Audio portal AP SSID"
     default "INK-ESP-AUDIO"
