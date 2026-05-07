@@ -15,7 +15,7 @@ esp_err_t pcf8574_init(pcf8574_t *dev, uint8_t addr, uint8_t initial_latch)
 
     ESP_RETURN_ON_ERROR(pcf8574_write(dev, initial_latch), TAG, "initial write failed");
     dev->initialized = true;
-    ESP_LOGI(TAG, "PCF8574 ready at 0x%02X with latch 0x%02X", dev->address, dev->latch);
+    ESP_LOGI(TAG, "[√] PCF8574 在线: 0x%02X", dev->address);
     return ESP_OK;
 }
 

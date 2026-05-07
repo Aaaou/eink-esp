@@ -37,10 +37,9 @@ static esp_err_t audio_init_i2s(void)
     ESP_RETURN_ON_ERROR(i2s_channel_enable(tx), TAG, "enable tx failed");
     ESP_RETURN_ON_ERROR(i2s_channel_enable(rx), TAG, "enable rx failed");
 
-    ESP_LOGI(TAG, "I2S ready: sample_rate=16000 bclk=%d lrck=%d mclk=%d dout=%d din=%d",
+    ESP_LOGI(TAG, "[√] I2S 已就绪: 采样率=16000 BCLK=%d LRCK=%d MCLK=%d DOUT=%d DIN=%d",
              BOARD_I2S_BCLK_GPIO, BOARD_I2S_LRCK_GPIO, BOARD_I2S_MCLK_GPIO,
              BOARD_I2S_DOUT_GPIO, BOARD_I2S_DIN_GPIO);
-    ESP_LOGI(TAG, "Speaker path is expected on ES8311 OUTP/OUTN; mic path is expected on MIC1P/MIC1N");
     return ESP_OK;
 }
 
@@ -59,12 +58,12 @@ static esp_err_t audio_probe_codec(board_probe_result_t *probe)
         if (board_i2c_probe(addr)) {
             probe->es8311_found = true;
             probe->es8311_addr = addr;
-            ESP_LOGI(TAG, "ES8311 candidate responded at 0x%02X", addr);
+            ESP_LOGI(TAG, "[√] ES8311 在线: 0x%02X", addr);
             return ESP_OK;
         }
     }
 
-    ESP_LOGW(TAG, "ES8311 did not respond on 0x%02X or 0x%02X; schematic did not label the codec address",
+    ESP_LOGW(TAG, "[!] ES8311 未响应: 0x%02X / 0x%02X",
              BOARD_ES8311_ADDR_CANDIDATE0, BOARD_ES8311_ADDR_CANDIDATE1);
     return ESP_ERR_NOT_FOUND;
 }
@@ -73,18 +72,11 @@ esp_err_t audio_bringup_run(board_probe_result_t *probe)
 {
     ESP_RETURN_ON_FALSE(probe != NULL, ESP_ERR_INVALID_ARG, TAG, "probe is null");
 
-    ESP_LOGI(TAG, "Starting audio bring-up");
     esp_err_t probe_err = audio_probe_codec(probe);
     if (probe_err != ESP_OK) {
-        ESP_LOGW(TAG, "Continuing with I2S initialization for pin-level validation");
+        ESP_LOGW(TAG, "[!] 继续初始化 I2S，仅用于引脚联调");
     }
 
     ESP_RETURN_ON_ERROR(audio_init_i2s(), TAG, "audio I2S init failed");
-
-    if (probe->es8311_found) {
-        ESP_LOGI(TAG, "Audio verification hint: validate MCLK/SCLK/LRCK/DOUT/DIN on codec address 0x%02X",
-                 probe->es8311_addr);
-    }
-
     return ESP_OK;
 }

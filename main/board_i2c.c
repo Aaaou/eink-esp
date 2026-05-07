@@ -29,8 +29,7 @@ esp_err_t board_i2c_init(void)
     ESP_RETURN_ON_ERROR(i2c_driver_install(BOARD_I2C_PORT, cfg.mode, 0, 0, 0), TAG, "i2c_driver_install failed");
 
     s_i2c_ready = true;
-    ESP_LOGI(TAG, "I2C ready: port=%d scl=%d sda=%d freq=%d",
-             BOARD_I2C_PORT, BOARD_I2C_SCL_GPIO, BOARD_I2C_SDA_GPIO, BOARD_I2C_FREQ_HZ);
+    ESP_LOGI(TAG, "[√] I2C 已就绪: SCL=%d SDA=%d 频率=%d", BOARD_I2C_SCL_GPIO, BOARD_I2C_SDA_GPIO, BOARD_I2C_FREQ_HZ);
     return ESP_OK;
 }
 
@@ -74,10 +73,10 @@ bool board_i2c_probe(uint8_t dev_addr)
 
 void board_i2c_scan(void)
 {
-    ESP_LOGI(TAG, "Scanning I2C bus for responding devices");
+    ESP_LOGI(TAG, "I2C 扫描结果:");
     for (uint8_t addr = 1; addr < 0x78; ++addr) {
         if (board_i2c_probe(addr)) {
-            ESP_LOGI(TAG, "I2C device detected at 0x%02X", addr);
+            ESP_LOGI(TAG, "[√] 发现设备: 0x%02X", addr);
         }
     }
 }

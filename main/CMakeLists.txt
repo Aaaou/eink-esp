@@ -4,9 +4,10 @@ idf_component_register(
         "board_bringup.c"
         "board_i2c.c"
         "board_spi.c"
-        "pcf8574.c"
         "audio_bringup.c"
+        "epd_213_z19c.c"
         "eink_bringup.c"
+        "pcf8574.c"
     INCLUDE_DIRS
         "."
     REQUIRES
