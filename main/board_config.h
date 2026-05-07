@@ -1,5 +1,7 @@
 #pragma once
 
+#include "project_defaults.h"
+#include "sdkconfig.h"
 #include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "driver/spi_master.h"
@@ -16,6 +18,7 @@
 #define BOARD_I2S_MCLK_GPIO           GPIO_NUM_5
 #define BOARD_I2S_DOUT_GPIO           GPIO_NUM_2
 #define BOARD_I2S_DIN_GPIO            GPIO_NUM_0
+#define BOARD_BOOT_BUTTON_GPIO        ((gpio_num_t)CONFIG_AUDIO_RECORD_BUTTON_GPIO)
 
 #define BOARD_EINK_SPI_HOST           SPI2_HOST
 #define BOARD_EINK_SCLK_GPIO          GPIO_NUM_7

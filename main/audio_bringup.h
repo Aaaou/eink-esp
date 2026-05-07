@@ -3,4 +3,10 @@
 #include "board_config.h"
 #include "esp_err.h"
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
 esp_err_t audio_bringup_run(board_probe_result_t *probe);
+bool audio_capture_is_ready(void);
+esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size_t *bytes_written);

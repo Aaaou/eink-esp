@@ -5,7 +5,12 @@ idf_component_register(
         "board_i2c.c"
         "board_spi.c"
         "audio_bringup.c"
-        "epd_213_z19c.c"
+        "portal_service.c"
+        "recording_service.c"
+        "storage_service.c"
+        "eink_scene.c"
+        "eink_panel.c"
+        "eink_panel_213_uc8151d_z19c.c"
         "eink_bringup.c"
         "pcf8574.c"
     INCLUDE_DIRS
@@ -13,4 +18,17 @@ idf_component_register(
     REQUIRES
         driver
         esp_timer
+        esp_wifi
+        esp_event
+        esp_netif
+        esp_http_server
+        json
+        mbedtls
+        nvs_flash
+        spiffs
+        es8311
 )
+
+if(CONFIG_INK_SCENE_CJK_FONT_PUHUI_14)
+    target_sources(${COMPONENT_LIB} PRIVATE "font_puhui_14_1.c")
+endif()

@@ -1,33 +1,35 @@
 #include "eink_bringup.h"
 
-#include "epd_213_z19c.h"
+#include "eink_panel.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "project_defaults.h"
+#include "sdkconfig.h"
 
 #include <stdbool.h>
 #include <string.h>
 
 static const char *TAG = "eink_bringup";
 
-#define EINK_LANDSCAPE_WIDTH  EPD_213_Z19C_HEIGHT
-#define EINK_LANDSCAPE_HEIGHT EPD_213_Z19C_WIDTH
-#define EINK_GX_PAGE_HEIGHT   EPD_213_Z19C_HEIGHT
+#define EINK_LANDSCAPE_WIDTH  EINK_PANEL_HEIGHT
+#define EINK_LANDSCAPE_HEIGHT EINK_PANEL_WIDTH
+#define EINK_GX_PAGE_HEIGHT   EINK_PANEL_HEIGHT
 
-static uint8_t s_prev_plane[EPD_213_Z19C_BUF_LEN];
-static uint8_t s_new_plane[EPD_213_Z19C_BUF_LEN];
+static uint8_t s_prev_plane[EINK_PANEL_BUF_LEN];
+static uint8_t s_new_plane[EINK_PANEL_BUF_LEN];
 
 static void fb_clear(uint8_t *fb, uint8_t value)
 {
-    memset(fb, value, EPD_213_Z19C_BUF_LEN);
+    memset(fb, value, EINK_PANEL_BUF_LEN);
 }
 
 static void fb_set_native_pixel(uint8_t *fb, int x, int y, bool colored)
 {
-    if ((x < 0) || (x >= EPD_213_Z19C_WIDTH) || (y < 0) || (y >= EPD_213_Z19C_HEIGHT)) {
+    if ((x < 0) || (x >= EINK_PANEL_WIDTH) || (y < 0) || (y >= EINK_PANEL_HEIGHT)) {
         return;
     }
 
-    const int stride = EPD_213_Z19C_WIDTH / 8;
+    const int stride = EINK_PANEL_WIDTH / 8;
     const size_t index = (size_t)y * (size_t)stride + (size_t)(x / 8);
     const uint8_t mask = (uint8_t)(0x80U >> (x % 8));
 
@@ -44,7 +46,7 @@ static void fb_set_rot1_pixel(uint8_t *fb, int x, int y, bool colored)
         return;
     }
 
-    const int native_x = EPD_213_Z19C_WIDTH - 1 - y;
+    const int native_x = EINK_PANEL_WIDTH - 1 - y;
     const int native_y = x;
     fb_set_native_pixel(fb, native_x, native_y, colored);
 }
@@ -93,30 +95,45 @@ static void build_test_pattern(void)
 
 esp_err_t eink_bringup_run(void)
 {
-    ESP_LOGI(TAG, "==== 墨水屏刷新验证 ====");
-    ESP_LOGI(TAG, "[√] 接线确认: MOSI=GPIO6 SCLK=GPIO7 CS=GPIO8 DC=GPIO10 RES=P1 4150B_EN=P2 BUSY=未接");
-    ESP_LOGI(TAG, "[√] 当前策略: 对齐 GxEPD2_3C + GxEPD2_213_Z19c 官方流程");
-    ESP_LOGI(TAG, "[√] BUSY 处理: Arduino 主程序传入 EPD_BUSY=-1，底层不读忙脚，只按官方固定时间等待");
-    ESP_LOGI(TAG, "[√] 当前 page_height=%u (与 Arduino 示例 HEIGHT 模板一致)", (unsigned)EINK_GX_PAGE_HEIGHT);
+    const eink_panel_descriptor_t *panel = eink_panel_get_descriptor();
 
-    ESP_RETURN_ON_ERROR(epd_213_z19c_init(), TAG, "epd_213_z19c_init failed");
-    ESP_LOGI(TAG, "[√] 底层初始化完成");
+    ESP_LOGI(TAG, "==== E-ink refresh validation ====");
+    ESP_LOGI(TAG, "[√] Wiring: MOSI=GPIO6 SCLK=GPIO7 CS=GPIO8 DC=GPIO10 RES=P1 4150B_EN=P2 BUSY=NC");
+    ESP_LOGI(TAG, "[√] Panel: %s controller=%s ref=%s",
+        panel->model_id,
+        panel->controller,
+        panel->reference_driver);
+    ESP_LOGI(TAG, "[√] Timing: power_on=%ums clear=%ums full=%ums power_off=%ums",
+        panel->power_on_time_ms,
+        panel->clear_refresh_time_ms,
+        panel->full_refresh_time_ms,
+        panel->power_off_time_ms);
+    ESP_LOGI(TAG, "[√] Page height: %u", (unsigned)EINK_GX_PAGE_HEIGHT);
 
-    ESP_LOGI(TAG, "---- 阶段1: 官方 clearScreen 风格写白 ----");
-    ESP_RETURN_ON_ERROR(epd_213_z19c_clear_white_gx(), TAG, "clear white gx failed");
-    ESP_LOGI(TAG, "[√] 阶段1命令发送完成");
+    ESP_RETURN_ON_ERROR(eink_panel_init(), TAG, "eink_panel_init failed");
+    ESP_LOGI(TAG, "[√] Panel low-level init complete");
 
-    ESP_LOGI(TAG, "---- 阶段2: 官方 firstPage/nextPage 风格写图 ----");
+    if (CONFIG_INK_PANEL_CLEAR_BEFORE_DRAW) {
+        ESP_LOGI(TAG, "---- Stage 1: clear white ----");
+        ESP_RETURN_ON_ERROR(eink_panel_clear_white_gx(), TAG, "clear white gx failed");
+        ESP_LOGI(TAG, "[√] Stage 1 commands sent");
+    } else {
+        ESP_LOGI(TAG, "[√] Stage 1 clear skipped by config");
+    }
+
+    ESP_LOGI(TAG, "---- Stage 2: draw test pattern ----");
     build_test_pattern();
     ESP_RETURN_ON_ERROR(
-        epd_213_z19c_display_frame_gx(s_prev_plane, s_new_plane, EINK_GX_PAGE_HEIGHT),
+        eink_panel_display_frame_gx(s_prev_plane, s_new_plane, EINK_GX_PAGE_HEIGHT),
         TAG,
         "display frame gx failed");
-    ESP_LOGI(TAG, "[√] 阶段2命令发送完成");
+    ESP_LOGI(TAG, "[√] Stage 2 commands sent");
 
-    ESP_LOGI(TAG, "预期现象:");
-    ESP_LOGI(TAG, "1. 阶段1 应尽量清掉旧图");
-    ESP_LOGI(TAG, "2. 阶段2 应显示横屏外黑框、内红框和黑色块状标签");
-    ESP_LOGW(TAG, "[!] 若仍保持旧图，下一步优先怀疑屏参差异或仍缺少官方更底层初始化细节");
+    ESP_LOGI(TAG, "Expected result:");
+    ESP_LOGI(TAG, "1. Stage 2 should show outer black frame, inner red frame, and black blocks");
+    if (CONFIG_INK_PANEL_CLEAR_BEFORE_DRAW) {
+        ESP_LOGI(TAG, "2. Stage 1 should clear old content toward white before drawing");
+    }
+    ESP_LOGW(TAG, "[!] If the old image remains, check panel variant differences or deeper init details");
     return ESP_OK;
 }
