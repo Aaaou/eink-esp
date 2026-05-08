@@ -26,6 +26,7 @@ static bool s_audio_ready;
 #define AUDIO_CHANNELS 1
 #define AUDIO_FRAME_BYTES 4
 #define AUDIO_INPUT_BLOCK_BYTES 4096
+#define AUDIO_MONO_BLOCK_BYTES (AUDIO_INPUT_BLOCK_BYTES / 2)
 #define AUDIO_I2S_MCLK_MULTIPLE I2S_MCLK_MULTIPLE_256
 
 #define ES8311_SYSTEM_REG0D 0x0D
@@ -345,7 +346,7 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
     ESP_RETURN_ON_FALSE(file != NULL, ESP_FAIL, TAG, "failed to open wav path");
 
     uint8_t *input_buffer = malloc(AUDIO_INPUT_BLOCK_BYTES);
-    uint8_t *mono_buffer = malloc(AUDIO_INPUT_BLOCK_BYTES / 2);
+    uint8_t *mono_buffer = malloc(AUDIO_MONO_BLOCK_BYTES);
     if ((input_buffer == NULL) || (mono_buffer == NULL)) {
         free(input_buffer);
         free(mono_buffer);
@@ -388,8 +389,8 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
 
     while (total_data_bytes < output_bytes_target) {
         const uint32_t output_remaining = output_bytes_target - total_data_bytes;
-        const size_t mono_want = (output_remaining > sizeof(mono_buffer))
-            ? sizeof(mono_buffer)
+        const size_t mono_want = (output_remaining > AUDIO_MONO_BLOCK_BYTES)
+            ? AUDIO_MONO_BLOCK_BYTES
             : (size_t)output_remaining;
         const size_t input_want = mono_want * 2;
         size_t bytes_read = 0;
@@ -556,7 +557,7 @@ esp_err_t audio_play_wav_file(const char *path)
         ESP_LOGI(TAG, "[PLAY] ES8311 output volume=%d", volume_set);
     }
 
-    uint8_t *mono_buffer = malloc(AUDIO_INPUT_BLOCK_BYTES / 2);
+    uint8_t *mono_buffer = malloc(AUDIO_MONO_BLOCK_BYTES);
     uint8_t *stereo_buffer = malloc(AUDIO_INPUT_BLOCK_BYTES);
     if ((mono_buffer == NULL) || (stereo_buffer == NULL)) {
         free(mono_buffer);
@@ -570,7 +571,7 @@ esp_err_t audio_play_wav_file(const char *path)
 
     ESP_LOGI(TAG, "[PLAY] start path=%s payload=%lu", path, (unsigned long)header.data_size);
     while (remaining > 0) {
-        const size_t want = (remaining > sizeof(mono_buffer)) ? sizeof(mono_buffer) : (size_t)remaining;
+        const size_t want = (remaining > AUDIO_MONO_BLOCK_BYTES) ? AUDIO_MONO_BLOCK_BYTES : (size_t)remaining;
         const size_t got = fread(mono_buffer, 1, want, file);
         if (got == 0) {
             free(mono_buffer);
