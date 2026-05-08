@@ -8,8 +8,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "portal_service.h"
-#include "project_defaults.h"
 #include "sdkconfig.h"
+#include "project_defaults.h"
 
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -29,7 +29,9 @@ static TaskHandle_t s_portal_task;
 static atomic_bool s_recording;
 static atomic_bool s_portal_busy;
 static atomic_bool s_has_recording;
+static atomic_bool s_loop_pcm_ready;
 static atomic_size_t s_file_size;
+static atomic_size_t s_loop_pcm_bytes;
 static atomic_uint s_record_id;
 static const char *s_record_path = "/spiffs/record.wav";
 static const char *s_download_name = "record.wav";
@@ -58,6 +60,29 @@ static void record_task(void *arg)
         }
 
         atomic_store(&s_recording, true);
+        if (atomic_load(&s_loop_pcm_ready)) {
+            const size_t pcm_bytes = atomic_load(&s_loop_pcm_bytes);
+            const uint32_t record_id = atomic_load(&s_record_id);
+            ESP_LOGI(TAG,
+                "[LOOP %06lu] playback start pcm_bytes=%u",
+                (unsigned long)record_id,
+                (unsigned)pcm_bytes);
+            esp_err_t err = audio_play_pcm_blocks(
+                s_loop_pcm_blocks,
+                RECORDING_LOOP_PCM_BLOCK_COUNT,
+                RECORDING_LOOP_PCM_BLOCK_SIZE,
+                pcm_bytes);
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "[LOOP %06lu] playback done; next short press records again", (unsigned long)record_id);
+                atomic_store(&s_loop_pcm_ready, false);
+                atomic_store(&s_loop_pcm_bytes, 0);
+            } else {
+                ESP_LOGE(TAG, "[LOOP %06lu] playback failed: %s", (unsigned long)record_id, esp_err_to_name(err));
+            }
+            atomic_store(&s_recording, false);
+            continue;
+        }
+
         const uint32_t record_id = atomic_fetch_add(&s_record_id, 1U) + 1U;
 
         size_t bytes_written = 0;
@@ -92,17 +117,9 @@ static void record_task(void *arg)
                     (unsigned)bytes_written,
                     (unsigned)(RECORDING_EXPECTED_FILE_SIZE - 44U));
             }
-            ESP_LOGI(TAG, "[LOOP %06lu] playback start", (unsigned long)record_id);
-            err = audio_play_pcm_blocks(
-                s_loop_pcm_blocks,
-                RECORDING_LOOP_PCM_BLOCK_COUNT,
-                RECORDING_LOOP_PCM_BLOCK_SIZE,
-                bytes_written);
-            if (err == ESP_OK) {
-                ESP_LOGI(TAG, "[LOOP %06lu] playback done", (unsigned long)record_id);
-            } else {
-                ESP_LOGE(TAG, "[LOOP %06lu] playback failed: %s", (unsigned long)record_id, esp_err_to_name(err));
-            }
+            atomic_store(&s_loop_pcm_bytes, bytes_written);
+            atomic_store(&s_loop_pcm_ready, true);
+            ESP_LOGI(TAG, "[LOOP %06lu] RAM recording ready; next short press plays it", (unsigned long)record_id);
         } else {
             ESP_LOGE(TAG, "[LOOP %06lu] record failed: %s", (unsigned long)record_id, esp_err_to_name(err));
         }
@@ -163,7 +180,9 @@ static void button_task(void *arg)
             const uint32_t held_ms = (uint32_t)pdTICKS_TO_MS(now - press_start);
             ESP_LOGI(TAG, "[KEY] BOOT release after %lu ms", (unsigned long)held_ms);
             if (!long_press_fired && (held_ms < CONFIG_AUDIO_PORTAL_BUTTON_LONG_PRESS_MS)) {
-                ESP_LOGI(TAG, "[KEY] BOOT short press detected, starting local recording");
+                ESP_LOGI(TAG,
+                    "[KEY] BOOT short press detected, queue local %s",
+                    atomic_load(&s_loop_pcm_ready) ? "playback" : "recording");
                 esp_err_t err = recording_service_trigger();
                 if (err != ESP_OK) {
                     ESP_LOGW(TAG, "[!] Recording request ignored: %s", esp_err_to_name(err));
@@ -196,7 +215,7 @@ esp_err_t recording_service_init(void)
     xTaskCreate(record_task, "record_task", 6144, NULL, 5, &s_record_task);
     xTaskCreate(portal_task, "portal_start_task", 6144, NULL, 4, &s_portal_task);
     xTaskCreate(button_task, "record_btn_task", 3072, NULL, 4, NULL);
-    ESP_LOGI(TAG, "[OK] Recording service ready: button GPIO=%d short_press=record long_press=%dms start_ap duration=%dms",
+    ESP_LOGI(TAG, "[OK] Recording service ready: button GPIO=%d short_press=record/play toggle long_press=%dms start_ap duration=%dms",
         BOARD_BOOT_BUTTON_GPIO,
         CONFIG_AUDIO_PORTAL_BUTTON_LONG_PRESS_MS,
         CONFIG_AUDIO_RECORD_DURATION_MS);

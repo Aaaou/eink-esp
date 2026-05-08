@@ -3,8 +3,8 @@
 #include "eink_panel.h"
 #include "esp_check.h"
 #include "esp_log.h"
-#include "project_defaults.h"
 #include "sdkconfig.h"
+#include "project_defaults.h"
 
 #include <stdbool.h>
 #include <string.h>

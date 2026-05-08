@@ -1,183 +1,274 @@
-# ES8311 Audio Bring-up Notes
+# ES8311 音频调试记录
 
-Date: 2026-05-08
+日期：2026-05-09
 
-## Current Status
+## 当前结论
 
-- ES8311 is detected on I2C address `0x18`.
-- The board I2S wiring is now documented with both codec-side and ESP-side names in [c3墨水屏接线表格.md](/D:/DEMO/ink_esp/c3墨水屏接线表格.md).
-- The firmware pin mapping in [main/board_config.h](/D:/DEMO/ink_esp/main/board_config.h) must use ESP-IDF's I2S-controller perspective:
+当前固件已经回到最后可运行的 Moji/Xiaozhi 参考基线：
 
-| Signal | Codec-side name | ESP32-C3 GPIO | ESP-IDF field | Direction |
-| :-- | :-- | :-- | :-- | :-- |
-| Master clock | `MCLK` | GPIO5 | `mclk` | ESP -> ES8311 |
-| Bit clock | `SCLK` / `BCLK` | GPIO3 | `bclk` | ESP -> ES8311 |
-| Word select | `LRCK` | GPIO1 | `ws` | ESP -> ES8311 |
-| Playback data | ES8311 `DSDIN` / schematic `DIN` | GPIO0 | `dout` | ESP -> ES8311 |
-| Capture data | ES8311 `ASDOUT` / schematic `DOUT` | GPIO2 | `din` | ES8311 -> ESP |
-| I2C | `SCL` / `SDA` | GPIO20 / GPIO21 | I2C | bidirectional control |
+- ES8311 使用 `esp_codec_dev` 初始化
+- 采样率：`24000 Hz`
+- codec 通道：`1`
+- I2S slot：`stereo / both / auto`
+- DMA：`desc_num=6`，`frame_num=240`
+- 麦克风输入增益：`30 dB`
+- 播放音量：`100`
+- 默认关闭软件后处理：无 AGC、无 noise gate、无 limiter
+- BOOT 短按交替执行：第一次录音，下一次播放上一段 RAM 录音
 
-The important naming rule is:
+当前现象是：
 
-- schematic `DIN` means ES8311 data input, so it is ESP-IDF I2S `dout`
-- schematic `DOUT` means ES8311 data output, so it is ESP-IDF I2S `din`
-
-Expected boot log after the corrected mapping:
-
-```text
-I2S ready: sample_rate=16000 BCLK=3 LRCK=1 MCLK=5 DOUT=0 DIN=2
-```
-
-## What Was Already Changed
-
-The current [audio_bringup.c](/D:/DEMO/ink_esp/main/audio_bringup.c) is not the earliest simple version anymore.
-It already includes a partial migration toward a xiaozhi-style setup:
-
-- explicit I2S standard-mode configuration instead of only relying on the helper macro
-- stereo slot receive path
-- fixed `16-bit` slot width
-- `MCLK = sample_rate * 256`
-- microphone gain set to `30 dB`
-- raw capture diagnostics including:
-  - `left_nonzero`
-  - `right_nonzero`
-  - `raw_nonzero_bytes`
-  - one-shot raw I2S byte dump when `CONFIG_AUDIO_RECORD_I2S_RAW_DIAG=y`
-
-So the answer to "has ES8311 already been initialized and recorded in a xiaozhi-like way?" is:
-
-- `partly yes` on the I2S framing side
-- `not fully yes` on the codec-stack side
-
-We did **not** migrate to the full xiaozhi audio stack such as `esp_codec_dev` or its higher-level board codec abstraction.
-We only moved the current raw ES8311 + I2S setup closer to that style.
-
-## Diagnostic Timeline
-
-Before the DIN/DOUT direction fix, the firmware was effectively listening on the wrong I2S data pin.
-The recording path produced a valid WAV container, but the PCM payload was fully zero:
+- 麦克风已经能录到声音
+- 约 `5 cm` 距离能听清中文，但声音仍然糊
+- 远一点时声音明显变弱或不完整
+- 裸采集日志中仍能看到正向削顶：
 
 ```text
-PCM stats: samples=80000 min=0 max=0 avg_abs=0 nonzero=0/80000 left_nonzero=0 right_nonzero=0 raw_nonzero_bytes=0
+avg_abs=1443
+clip_max=618
+max=32767
 ```
 
-After correcting the ESP-IDF mapping to `DOUT=GPIO0` and `DIN=GPIO2`, the ESP32-C3 can read digital data from the ES8311 output pin.
-The current log is no longer all zero:
+另一组近距离日志中也出现过：
 
 ```text
-Recorded WAV: 320000 bytes payload to /spiffs/record.wav
-PCM stats: samples=160000 min=-1 max=0 avg_abs=0 nonzero=44428/160000 left_nonzero=44428 right_nonzero=44428 raw_nonzero_bytes=177712
+avg_abs=2446
+clip_max=1052
+max=32767
 ```
 
-The raw I2S diagnostic also shows the captured stream is mostly `0x00` and `0xFF`, which decodes as `0` and `-1` in common 16-bit interpretations:
+这说明当前主要问题不是“播放只播了一小段”，也不是 WAV/RAM 播放长度问题。播放日志显示 3 秒数据确实完整播放：
 
 ```text
-[DIAG] first 32 raw I2S bytes: 00 00 00 00 00 00 00 00 FF FF FF FF 00 00 00 00 FF FF FF FF 00 00 00 00 FF FF FF FF 00 00 00 00
-[DIAG] le16 min=-1 max=0 nonzero=142
-[DIAG] le16>>8 min=-1 max=0 nonzero=142
-[DIAG] be16 min=-1 max=0 nonzero=142
-[DIAG] 24bit-ish min=-1 max=0 nonzero=71
+[PLAY] done RAM block PCM elapsed=2950 ms payload=144000
 ```
 
-## Current Interpretation
+真正的问题是采集端音质差：有效声音有了，但波形里混有明显削顶/尖峰/前端失真。
 
-The latest evidence can reasonably exclude these as the primary issue:
+## Moji 参考配置状态
 
-- WAV file creation
-- SPIFFS storage
-- HTTP download
-- ESP32-C3 reading from a totally idle I2S RX pin
-- a simple little-endian vs big-endian mistake
-- a simple 16-bit vs 24-bit unpacking mistake
-- the earlier ESP-IDF `.din/.dout` GPIO direction error
+本项目当前音频基线参考了 `D:\DEMO\xiaozhi-esp32-main` 中的 Moji ES8311 配置方式，关键对应如下：
 
-What remains most suspicious:
+| 项目 | 当前项目 | Moji/Xiaozhi 参考 |
+| :-- | :-- | :-- |
+| ES8311 驱动层 | `esp_codec_dev` | `esp_codec_dev` |
+| 输入采样率 | `24000` | `24000` |
+| 输出采样率 | `24000` | `24000` |
+| codec open 通道 | `1` | `1` |
+| I2S slot mode | `I2S_SLOT_MODE_STEREO` | `I2S_SLOT_MODE_STEREO` |
+| I2S slot mask | `I2S_STD_SLOT_BOTH` | `I2S_STD_SLOT_BOTH` |
+| I2S slot width | `I2S_SLOT_BIT_WIDTH_AUTO` | `I2S_SLOT_BIT_WIDTH_AUTO` |
+| DMA desc num | `6` | `6` |
+| DMA frame num | `240` | `240` |
+| 输入增益 | `30 dB` | `30 dB` |
+| 输出音量 | `100` | 用户要求拉满 |
 
-1. ES8311 ADC input routing, PGA, ADC mute, or microphone-related register setup is still not exactly right for this board.
-2. The analog microphone signal may not be reaching the ES8311 ADC input with usable amplitude.
-3. The microphone capsule or its bias/coupling path may have an assembly issue, even though static DC readings look plausible.
+当前启动日志应该出现类似内容：
 
-Important nuance:
+```text
+[OK] ES8311 configured moji-style: addr7=0x18 addr8=0x30 sample_rate=24000 codec_channels=1 input_gain=30dB volume=100 slot=stereo/both/auto
+```
 
-- The current data proves ES8311 is shifting some digital capture data back to the ESP.
-- It does **not** prove that the microphone analog path is producing real audio.
-- It does **not** prove the microphone is damaged either; it only says the codec output is still near digital silence.
+录音开始时应该出现：
 
-## Microphone Schematic Observation
+```text
+[MIC] processing=0 noise_gate=0 agc=0 agc_target=1100 agc_max_x100=250 limiter=0
+```
 
-The uploaded microphone fragment shows:
+这表示当前测试的是裸 ES8311 采集结果，不是软件滤波后的结果。
 
-- `MICP` and `MICN` routed through coupling capacitors into the codec input
-- `VREF` and local analog filtering around the microphone front end
-- `+3V3` feeding the bias network through ferrite beads and decoupling
+## 可能原因判断
 
-At a high level, this is a normal-looking analog microphone front-end pattern.
-Nothing immediately looks fundamentally wrong from this fragment alone.
+### 1. 麦克风本体或声学结构：高度可疑
 
-## Can 3.3V On The Coupling Caps Prove Audio Is Fine?
+概率：高。
 
-No.
+理由：
 
-What it proves:
+- 需要约 `5 cm` 才能得到完整声音，这比正常小型模拟麦克风期望距离更近。
+- 远距离声音弱，近距离又容易出现削顶，说明可用动态范围比较差。
+- 如果麦克风孔被外壳、胶、泡棉、贴纸、焊剂残留遮挡，也会出现“能录到但糊、闷、距离很近才清楚”的表现。
+- 某些低质量驻极体或模拟 MEMS 麦克风本身频响差，也会听起来像低通后的声音。
 
-- the bias network is probably alive
-- the microphone front end is probably not totally open-circuit
+建议优先检查：
 
-What it does **not** prove:
+- 麦克风孔是否对准外壳开孔
+- 麦克风孔是否被胶、泡棉、灰尘、焊剂遮挡
+- 麦克风型号是否为模拟输出，而不是 PDM/I2S 数字麦克风
+- 若是驻极体麦克风，正负极方向和偏置是否正确
+- 若条件允许，直接换一颗确认过正常的模拟麦克风做 A/B 对比
 
-- the differential audio waveform is reaching the ES8311 ADC correctly
-- the ADC / PGA path is enabled correctly
-- the codec is producing meaningful non-silent audio samples
-- the microphone capsule itself is healthy
+### 2. 硬件前端、电容/电感/偏置网络：高度可疑
 
-## PCB Routing Guidance
+概率：高。
 
-For this design class:
+理由：
 
-- `MICP/MICN` should be kept short and away from noisy switching nodes
-- if possible, route microphone inputs as a close pair
-- avoid running them parallel to Wi-Fi antenna feed, SPI clock, I2S clock, or DC/DC switching nodes
-- analog bias / reference decoupling should stay physically close to the codec
+- 当前已经不是纯软件静音，说明 ES8311 数字链路基本通了。
+- 但音频需要贴近、声音糊、并且有削顶，常见于模拟输入幅度、偏置、耦合、滤波或供电不合适。
+- `MICP/MICN` 前端如果耦合电容取值不合适、偏置电阻错误、MICBIAS 供电异常，会导致低频/中频被削、声音闷或动态范围异常。
+- 电感/磁珠若用于模拟电源滤波，选型或布局不当可能引入压降、噪声耦合或供电不稳。
 
-For digital audio lines:
+建议优先检查：
 
-- `MCLK`, `BCLK`, `LRCK`, `DSDIN`, and `ASDOUT` do not require controlled impedance on a small board at these lengths
-- they do benefit from:
-  - short traces
-  - solid reference ground underneath when possible
-  - avoiding long parallel runs with the microphone input pair
+- ES8311 `MICBIAS` 或麦克风供电是否稳定
+- `MICP/MICN` 到 ES8311 的耦合电容是否焊接正确、容量是否符合参考设计
+- 偏置电阻是否为正确阻值
+- 模拟地回流是否干净，是否和 I2S/SPI/Wi-Fi 高速线靠得过近
+- 麦克风输入线是否靠近 `MCLK/BCLK/LRCK/SPI_CLK/DC-DC` 等噪声源
+- 模拟电源磁珠/电感两侧是否有合适去耦电容
 
-About ground pour / shielding:
+是否需要直接换电容：
 
-- yes, keeping a continuous ground reference under the digital audio lines is helpful
-- yes, the microphone analog area benefits from quiet local ground and physical separation from noisy clocks
-- no, these short I2S traces usually do not need special shielding or exotic impedance treatment
+- 不建议先盲换。
+- 更建议先用示波器看 `MICP/MICN` 或麦克风输出端说话时是否有清晰模拟波形。
+- 如果模拟波形本身已经很小、很脏或被削顶，再针对耦合电容、偏置、麦克风本体下手。
+- 如果模拟波形正常，但 ES8311 输出 PCM 糊或削顶，再回到 codec 输入配置或 ADC 路径。
 
-In plain terms:
+### 3. 软件滤波/软件处理：不是当前主因
 
-- analog mic traces: treat gently
-- I2S traces: keep short and referenced to ground
-- the biggest risk is usually analog noise coupling or analog input routing, not transmission-line behavior
+概率：中低。
 
-## Next Hardware Check
+理由：
 
-When a scope or logic analyzer is available, observe these while a recording is active and someone is speaking near the microphone:
+- 当前 Moji 基线下 `processing=0`，也就是没有启用 AGC、noise gate、limiter。
+- 因此当前“糊”和“削顶”不是软件滤波造成的。
+- 软件 limiter 可以缓解 `clip_max` 带来的爆音，但只能改善听感，不能解决根因。
+- 软件 AGC 如果加得太早，反而可能把噪声和失真一起放大，造成“更糊”。
 
-1. `GPIO5 / MCLK`
-2. `GPIO3 / BCLK`
-3. `GPIO1 / LRCK`
-4. `GPIO2 / ES8311 ASDOUT(DOUT) / ESP DIN`
+建议：
 
-Interpretation:
+- 保持当前裸采集基线，先定位硬件前端。
+- 后续可以在硬件确认后再加轻量处理：
+  - DC blocker
+  - soft limiter
+  - very mild noise suppressor
+- 不建议现在启用强 AGC 或强 noise gate。
 
-- if `MCLK/BCLK/LRCK` are missing, the problem is on the ESP32-C3 I2S clock side
-- if clocks exist but `GPIO2 / ASDOUT` is stuck flat, the problem is likely inside ES8311 ADC/output routing
-- if `GPIO2 / ASDOUT` toggles but only between near-zero codes while speaking, focus on ADC input routing, PGA, MICBIAS, microphone capsule, or analog front-end assembly
-- `GPIO0 / ES8311 DSDIN(DIN) / ESP DOUT` is playback input to the codec and is less useful for debugging microphone capture
+## 关于“声音糊”的具体判断
 
-## Separate Note About Wi-Fi Brownout
+当前“糊”更像以下组合问题：
 
-Earlier Wi-Fi brownout behavior was very likely a power-path issue related to the TP4056 `BAT` node being unstable without a battery attached.
-After adding a battery, SoftAP startup became stable.
+1. 麦克风有效信号距离太近
+2. 模拟输入动态范围差
+3. 近距离时 ADC 正向削顶
+4. 可能存在声学孔遮挡或模拟前端低通/偏置异常
 
-This appears to be independent from the current near-silent audio capture issue.
+如果是单纯软件问题，通常会看到：
+
+- 原始 PCM 清楚，但处理后变糊
+- 开关处理后声音差异巨大
+- `processing=1` 时糊，`processing=0` 时正常
+
+但目前相反：`processing=0` 的裸采集已经糊，所以软件不是第一嫌疑。
+
+## 建议的下一步验证
+
+### A. 导出 WAV 到电脑听
+
+继续使用长按 BOOT 启动音频门户，导出录音 WAV。
+
+在电脑上听可以排除开发板小喇叭/功放/腔体造成的二次失真。如果电脑听也糊，问题在录音链路；如果电脑听清楚但板上播放糊，问题才转向喇叭/播放链路。
+
+### B. 固定测试距离
+
+建议分别录：
+
+- `5 cm`
+- `15 cm`
+- `30 cm`
+
+每段说同一句话，并记录 `avg_abs`、`clip_max`、`max`。
+
+期望趋势：
+
+- `5 cm` 不应大量 `clip_max`
+- `15 cm` 应该仍然能清楚识别中文
+- `30 cm` 应该变小，但不应完全不可懂
+
+如果只有 `5 cm` 可用，麦克风/声学/模拟前端优先级继续升高。
+
+### C. 看模拟波形
+
+如果有示波器，录音时观察：
+
+- 麦克风输出端
+- ES8311 `MICP`
+- ES8311 `MICN`
+- ES8311 模拟电源
+- MICBIAS 或麦克风供电
+
+判断：
+
+- 模拟端说话波形很小：麦克风/偏置/孔位问题
+- 模拟端波形已经削顶：偏置或前端动态范围问题
+- 模拟端波形正常，PCM 糊：codec 输入配置或 ADC 路径问题
+
+### D. 看数字 I2S
+
+如果有逻辑分析仪，录音时观察：
+
+- `MCLK` / GPIO5
+- `BCLK` / GPIO3
+- `LRCK` / GPIO1
+- `ASDOUT` / GPIO2
+
+当前数字链路已经基本能工作，但如果偶发 ES8311 不响应，还需要确认 codec 上电和时钟时序是否稳定。
+
+## I2C 偶发只扫到 0x20 的说明
+
+曾出现启动时只扫到：
+
+```text
+0x20
+```
+
+未扫到：
+
+```text
+0x18
+```
+
+`0x20` 是当前板上的 IO 扩展器。ES8311 正常应在 `0x18` 响应。这个现象说明 ES8311 可能存在偶发上电、复位或供电时序问题。
+
+目前为保持最后能运行的 Moji 基线，固件没有强制等待 ES8311，也不会因为一次未扫到就中止整机启动。
+
+如果这个问题频繁出现，应检查：
+
+- ES8311 AVDD/DVDD 是否稳定
+- ES8311 reset/powerdown 脚是否悬空或被拉住
+- I2C 上拉是否足够
+- `0x20` IO 扩展器是否实际还有未定义的 codec 电源/复位控制位
+
+## 当前优先级排序
+
+最可能：
+
+1. 麦克风本体、麦克风孔、声学结构
+2. 麦克风偏置/耦合电容/模拟前端滤波
+3. ES8311 供电或上电时序
+
+次可能：
+
+4. ES8311 输入寄存器仍有板级差异
+5. PCB 上模拟麦克风线受 I2S/SPI/Wi-Fi/DC-DC 干扰
+
+目前不优先：
+
+6. 软件滤波导致声音糊
+7. 播放长度或 RAM 播放逻辑
+8. WAV 容器或导出路径
+
+## 当前建议
+
+短期不要再继续大幅改软件音频算法。先按当前 Moji 基线固定下来，做硬件 A/B：
+
+1. 导出 WAV 到电脑听
+2. 换一颗确认正常的模拟麦克风
+3. 检查麦克风孔和焊接
+4. 测 MICBIAS/麦克风供电
+5. 测 `MICP/MICN` 说话波形
+
+如果换麦克风后明显变清楚，根因基本就是麦克风本体或声学结构。
+
+如果换麦克风仍糊，再重点查耦合电容、偏置网络、电源滤波和 PCB 布局。

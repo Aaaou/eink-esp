@@ -26,7 +26,7 @@ idf_component_register(
         mbedtls
         nvs_flash
         spiffs
-        es8311
+        esp_codec_dev
 )
 
 if(CONFIG_INK_SCENE_CJK_FONT_PUHUI_14)

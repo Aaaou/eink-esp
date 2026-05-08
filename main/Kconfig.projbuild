@@ -94,35 +94,69 @@ config AUDIO_RECORD_DURATION_MS
 config AUDIO_RECORD_SAMPLE_RATE
     int "Audio recording sample rate (Hz)"
     range 8000 48000
-    default 16000
+    default 24000
     help
         Sample rate used for I2S capture and WAV export.
 
-config AUDIO_ES8311_ADC_GAIN_REG16
-    int "ES8311 ADC gain register 0x16"
-    range 0 7
-    default 2
+config AUDIO_ES8311_INPUT_GAIN_DB
+    int "ES8311 microphone input gain (dB)"
+    range 0 42
+    default 30
     help
-        ES8311 ADC/PGA gain written to register 0x16. The es8311 component
-        enum maps 0..7 to 0, 6, 12, 18, 24, 30, 36, 42 dB. Use lower values
-        while the recording clips at -32768 or 32767.
-
-config AUDIO_ES8311_ADC_VOLUME_REG17
-    int "ES8311 ADC digital volume register 0x17"
-    range 0 255
-    default 160
-    help
-        ES8311 ADC digital volume written to register 0x17. The previous
-        bring-up value was 200 (0xC8), which can clip loud analog input.
+        Microphone gain passed to esp_codec_dev_set_in_gain(). The ES8311
+        driver maps this to 0, 6, 12, 18, 24, 30, 36, or 42 dB hardware gain.
 
 config AUDIO_PLAYBACK_VOLUME
     int "ES8311 playback volume"
     range 0 100
-    default 65
+    default 100
     help
         Volume used for startup tone and local RAM loopback playback.
-        Lower this while judging microphone quality so the speaker path does
-        not add extra distortion.
+
+config AUDIO_CAPTURE_PROCESSING
+    bool "Apply lightweight microphone processing"
+    default n
+    help
+        Apply a low-cost microphone chain during capture: high-pass DC removal,
+        noise gate, adaptive gain, and soft limiting. Keep this disabled for
+        the Moji-style ES8311 baseline test.
+
+config AUDIO_CAPTURE_NOISE_GATE
+    bool "Apply microphone noise gate"
+    default n
+    depends on AUDIO_CAPTURE_PROCESSING
+    help
+        Suppress very low-level idle noise before recording/playback.
+
+config AUDIO_CAPTURE_AGC
+    bool "Apply microphone automatic gain"
+    default y
+    depends on AUDIO_CAPTURE_PROCESSING
+    help
+        Raise quieter speech while preventing close speech from clipping.
+
+config AUDIO_CAPTURE_AGC_TARGET_AVG
+    int "Microphone AGC target average amplitude"
+    range 300 6000
+    default 1100
+    depends on AUDIO_CAPTURE_AGC
+    help
+        Target short-term average absolute amplitude after AGC.
+
+config AUDIO_CAPTURE_AGC_MAX_GAIN_X100
+    int "Microphone AGC maximum gain x100"
+    range 100 1200
+    default 250
+    depends on AUDIO_CAPTURE_AGC
+    help
+        Maximum AGC gain. 250 means 2.5x and 500 means 5.0x.
+
+config AUDIO_CAPTURE_SOFT_LIMITER
+    bool "Apply microphone soft limiter"
+    default y
+    depends on AUDIO_CAPTURE_PROCESSING
+    help
+        Smoothly limit peaks near full scale instead of hard clipping.
 
 config AUDIO_LOOPBACK_DC_BLOCK
     bool "Apply DC blocker before RAM loopback playback"
@@ -156,15 +190,6 @@ config AUDIO_RECORD_I2S_RAW_DIAG
         Print a short raw I2S frame dump and alternate sample interpretations
         during recording. This is useful while validating ES8311 slot width,
         bit alignment, and ADC output on a new board.
-
-config AUDIO_ES8311_ANALOG_MIC_FIXUP
-    bool "Apply board-specific ES8311 analog mic register fixup"
-    default y
-    help
-        Explicitly confirm ES8311 analog Mic1P-Mic1N capture registers after
-        the component's generic microphone setup. Register 0x14 uses the ES8311
-        datasheet encoding, where 0x1A means Mic1P-Mic1N with max 30dB analog
-        PGA. Do not map the es8311_mic_gain_t enum directly into register 0x14.
 
 config AUDIO_PORTAL_AP_SSID
     string "Audio portal AP SSID"

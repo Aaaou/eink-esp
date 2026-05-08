@@ -6,8 +6,8 @@
 #include "eink_bringup.h"
 #include "esp_check.h"
 #include "esp_log.h"
-#include "project_defaults.h"
 #include "sdkconfig.h"
+#include "project_defaults.h"
 
 static const char *TAG = "board_bringup";
 

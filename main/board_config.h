@@ -1,7 +1,7 @@
 #pragma once
 
-#include "project_defaults.h"
 #include "sdkconfig.h"
+#include "project_defaults.h"
 #include "driver/gpio.h"
 #include "driver/i2c.h"
 #include "driver/spi_master.h"

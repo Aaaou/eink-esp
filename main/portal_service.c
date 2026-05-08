@@ -14,9 +14,9 @@
 #include "freertos/task.h"
 #include "lwip/inet.h"
 #include "nvs.h"
-#include "project_defaults.h"
 #include "recording_service.h"
 #include "sdkconfig.h"
+#include "project_defaults.h"
 
 #include <stdbool.h>
 #include <stdio.h>

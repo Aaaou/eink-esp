@@ -4,9 +4,9 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "portal_service.h"
-#include "project_defaults.h"
 #include "recording_service.h"
 #include "sdkconfig.h"
+#include "project_defaults.h"
 #include "storage_service.h"
 
 static const char *TAG = "app_main";
