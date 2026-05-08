@@ -12,13 +12,17 @@
 #include "sdkconfig.h"
 
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/stat.h>
 
 static const char *TAG = "recording_service";
 #define RECORDING_EXPECTED_FILE_SIZE \
     ((size_t)44U + ((size_t)CONFIG_AUDIO_RECORD_SAMPLE_RATE * 2U * (size_t)CONFIG_AUDIO_RECORD_DURATION_MS / 1000U))
+#define RECORDING_LOOP_PCM_BLOCK_SIZE 16384U
+#define RECORDING_LOOP_PCM_BYTES (RECORDING_EXPECTED_FILE_SIZE - 44U)
+#define RECORDING_LOOP_PCM_BLOCK_COUNT \
+    ((RECORDING_LOOP_PCM_BYTES + RECORDING_LOOP_PCM_BLOCK_SIZE - 1U) / RECORDING_LOOP_PCM_BLOCK_SIZE)
 
 static TaskHandle_t s_record_task;
 static TaskHandle_t s_portal_task;
@@ -29,6 +33,8 @@ static atomic_size_t s_file_size;
 static atomic_uint s_record_id;
 static const char *s_record_path = "/spiffs/record.wav";
 static const char *s_download_name = "record.wav";
+static uint8_t *s_loop_pcm_blocks[RECORDING_LOOP_PCM_BLOCK_COUNT];
+static size_t s_loop_pcm_capacity;
 
 static void recording_copy_str(char *dst, const char *src, size_t dst_size)
 {
@@ -40,15 +46,6 @@ static void recording_copy_str(char *dst, const char *src, size_t dst_size)
         return;
     }
     snprintf(dst, dst_size, "%s", src);
-}
-
-static size_t recording_file_size(const char *path)
-{
-    struct stat st;
-    if ((path == NULL) || (stat(path, &st) != 0)) {
-        return 0;
-    }
-    return (size_t)st.st_size;
 }
 
 static void record_task(void *arg)
@@ -63,41 +60,44 @@ static void record_task(void *arg)
         atomic_store(&s_recording, true);
         const uint32_t record_id = atomic_fetch_add(&s_record_id, 1U) + 1U;
 
-        remove(s_record_path);
-
         size_t bytes_written = 0;
         const int64_t start_ms = esp_log_timestamp();
         ESP_LOGI(TAG,
-            "[LOOP %06lu] record start duration=%u ms sample_rate=%u expected_size=%u path=%s",
+            "[LOOP %06lu] record start duration=%u ms sample_rate=%u expected_pcm=%u target=RAM",
             (unsigned long)record_id,
             CONFIG_AUDIO_RECORD_DURATION_MS,
             CONFIG_AUDIO_RECORD_SAMPLE_RATE,
-            (unsigned)RECORDING_EXPECTED_FILE_SIZE,
-            s_record_path);
+            (unsigned)(RECORDING_EXPECTED_FILE_SIZE - 44U));
 
-        esp_err_t err = audio_capture_wav_to_file(s_record_path, CONFIG_AUDIO_RECORD_DURATION_MS, &bytes_written);
+        esp_err_t err = audio_capture_pcm_to_blocks(
+            s_loop_pcm_blocks,
+            RECORDING_LOOP_PCM_BLOCK_COUNT,
+            RECORDING_LOOP_PCM_BLOCK_SIZE,
+            CONFIG_AUDIO_RECORD_DURATION_MS,
+            &bytes_written);
         if (err == ESP_OK) {
-            const size_t actual_size = recording_file_size(s_record_path);
             const int64_t elapsed_ms = (int64_t)esp_log_timestamp() - start_ms;
-            atomic_store(&s_has_recording, true);
-            atomic_store(&s_file_size, actual_size);
+            atomic_store(&s_has_recording, false);
+            atomic_store(&s_file_size, 0);
             ESP_LOGI(TAG,
-                "[LOOP %06lu] record done elapsed=%lld ms bytes_written=%u actual_size=%u expected_size=%u",
+                "[LOOP %06lu] record done elapsed=%lld ms pcm_bytes=%u expected_pcm=%u",
                 (unsigned long)record_id,
                 (long long)elapsed_ms,
                 (unsigned)bytes_written,
-                (unsigned)actual_size,
-                (unsigned)RECORDING_EXPECTED_FILE_SIZE);
-            if ((actual_size != bytes_written) || (actual_size != RECORDING_EXPECTED_FILE_SIZE)) {
+                (unsigned)(RECORDING_EXPECTED_FILE_SIZE - 44U));
+            if (bytes_written != (RECORDING_EXPECTED_FILE_SIZE - 44U)) {
                 ESP_LOGW(TAG,
-                    "[LOOP %06lu] size mismatch: bytes_written=%u actual=%u expected=%u",
+                    "[LOOP %06lu] PCM size mismatch: bytes_written=%u expected=%u",
                     (unsigned long)record_id,
                     (unsigned)bytes_written,
-                    (unsigned)actual_size,
-                    (unsigned)RECORDING_EXPECTED_FILE_SIZE);
+                    (unsigned)(RECORDING_EXPECTED_FILE_SIZE - 44U));
             }
             ESP_LOGI(TAG, "[LOOP %06lu] playback start", (unsigned long)record_id);
-            err = audio_play_wav_file(s_record_path);
+            err = audio_play_pcm_blocks(
+                s_loop_pcm_blocks,
+                RECORDING_LOOP_PCM_BLOCK_COUNT,
+                RECORDING_LOOP_PCM_BLOCK_SIZE,
+                bytes_written);
             if (err == ESP_OK) {
                 ESP_LOGI(TAG, "[LOOP %06lu] playback done", (unsigned long)record_id);
             } else {
@@ -178,6 +178,12 @@ static void button_task(void *arg)
 
 esp_err_t recording_service_init(void)
 {
+    s_loop_pcm_capacity = RECORDING_LOOP_PCM_BYTES;
+    for (size_t i = 0; i < RECORDING_LOOP_PCM_BLOCK_COUNT; ++i) {
+        s_loop_pcm_blocks[i] = malloc(RECORDING_LOOP_PCM_BLOCK_SIZE);
+        ESP_RETURN_ON_FALSE(s_loop_pcm_blocks[i] != NULL, ESP_ERR_NO_MEM, TAG, "record loop PCM block alloc failed");
+    }
+
     const gpio_config_t button_cfg = {
         .pin_bit_mask = (1ULL << BOARD_BOOT_BUTTON_GPIO),
         .mode = GPIO_MODE_INPUT,

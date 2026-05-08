@@ -45,6 +45,25 @@ static bool s_audio_ready;
 #define ES8311_BOARD_ADC_VOLUME_REG17 0xC8
 
 typedef struct {
+    int16_t pcm_min;
+    int16_t pcm_max;
+    uint64_t abs_sum;
+    uint32_t sample_count;
+    uint32_t nonzero_count;
+    uint32_t left_nonzero_count;
+    uint32_t right_nonzero_count;
+    uint32_t raw_nonzero_bytes;
+    uint32_t clip_min_count;
+    uint32_t clip_max_count;
+    uint32_t read_calls;
+    uint32_t short_reads;
+    uint32_t min_read_bytes;
+    uint32_t max_read_bytes;
+    uint32_t max_read_ms;
+    uint64_t total_read_ms;
+} audio_capture_stats_t;
+
+typedef struct {
     char riff[4];
     uint32_t file_size_minus_8;
     char wave[4];
@@ -337,54 +356,93 @@ static bool wav_header_is_usable(const wav_header_t *header)
            (header->bits_per_sample == AUDIO_BITS_PER_SAMPLE);
 }
 
-esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size_t *bytes_written)
+static void audio_capture_stats_init(audio_capture_stats_t *stats)
 {
-    ESP_RETURN_ON_FALSE(audio_capture_is_ready(), ESP_ERR_INVALID_STATE, TAG, "audio capture not ready");
-    ESP_RETURN_ON_FALSE(path != NULL, ESP_ERR_INVALID_ARG, TAG, "path is null");
+    stats->pcm_min = INT16_MAX;
+    stats->pcm_max = INT16_MIN;
+    stats->abs_sum = 0;
+    stats->sample_count = 0;
+    stats->nonzero_count = 0;
+    stats->left_nonzero_count = 0;
+    stats->right_nonzero_count = 0;
+    stats->raw_nonzero_bytes = 0;
+    stats->clip_min_count = 0;
+    stats->clip_max_count = 0;
+    stats->read_calls = 0;
+    stats->short_reads = 0;
+    stats->min_read_bytes = UINT32_MAX;
+    stats->max_read_bytes = 0;
+    stats->max_read_ms = 0;
+    stats->total_read_ms = 0;
+}
 
-    FILE *file = fopen(path, "wb");
-    ESP_RETURN_ON_FALSE(file != NULL, ESP_FAIL, TAG, "failed to open wav path");
+static void audio_log_capture_summary(
+    const char *target,
+    uint32_t duration_ms,
+    uint32_t elapsed_ms,
+    const audio_capture_stats_t *stats,
+    uint64_t total_write_ms,
+    uint32_t max_write_ms)
+{
+    ESP_LOGI(TAG,
+        "[OK] Capture timing: target=%lu ms elapsed=%lu ms read_calls=%lu short_reads=%lu read_bytes=%lu..%lu read_ms_total=%llu max=%lu write_ms_total=%llu max=%lu",
+        (unsigned long)duration_ms,
+        (unsigned long)elapsed_ms,
+        (unsigned long)stats->read_calls,
+        (unsigned long)stats->short_reads,
+        (unsigned long)((stats->min_read_bytes == UINT32_MAX) ? 0 : stats->min_read_bytes),
+        (unsigned long)stats->max_read_bytes,
+        (unsigned long long)stats->total_read_ms,
+        (unsigned long)stats->max_read_ms,
+        (unsigned long long)total_write_ms,
+        (unsigned long)max_write_ms);
+    ESP_LOGI(TAG,
+        "[OK] PCM stats (%s): samples=%lu min=%d max=%d avg_abs=%u nonzero=%lu/%lu left_nonzero=%lu right_nonzero=%lu clip_min=%lu clip_max=%lu raw_nonzero_bytes=%lu",
+        target,
+        (unsigned long)stats->sample_count,
+        (stats->sample_count > 0) ? stats->pcm_min : 0,
+        (stats->sample_count > 0) ? stats->pcm_max : 0,
+        (stats->sample_count > 0) ? (unsigned)(stats->abs_sum / stats->sample_count) : 0U,
+        (unsigned long)stats->nonzero_count,
+        (unsigned long)stats->sample_count,
+        (unsigned long)stats->left_nonzero_count,
+        (unsigned long)stats->right_nonzero_count,
+        (unsigned long)stats->clip_min_count,
+        (unsigned long)stats->clip_max_count,
+        (unsigned long)stats->raw_nonzero_bytes);
+}
 
+static esp_err_t audio_capture_pcm_stream(
+    uint32_t duration_ms,
+    FILE *file,
+    uint8_t *output_buffer,
+    uint8_t **output_blocks,
+    size_t output_block_count,
+    size_t output_block_size,
+    size_t output_capacity,
+    size_t *bytes_written,
+    audio_capture_stats_t *stats,
+    uint64_t *total_write_ms,
+    uint32_t *max_write_ms)
+{
     uint8_t *input_buffer = malloc(AUDIO_INPUT_BLOCK_BYTES);
     uint8_t *mono_buffer = malloc(AUDIO_MONO_BLOCK_BYTES);
     if ((input_buffer == NULL) || (mono_buffer == NULL)) {
         free(input_buffer);
         free(mono_buffer);
-        fclose(file);
         return ESP_ERR_NO_MEM;
-    }
-
-    wav_header_t header;
-    wav_header_fill(&header, 0);
-    if (fwrite(&header, 1, sizeof(header), file) != sizeof(header)) {
-        free(input_buffer);
-        free(mono_buffer);
-        fclose(file);
-        return ESP_FAIL;
     }
 
     const uint32_t output_bytes_target =
         (AUDIO_SAMPLE_RATE_HZ * (AUDIO_BITS_PER_SAMPLE / 8U) * duration_ms) / 1000U;
+    if (output_bytes_target > output_capacity) {
+        free(input_buffer);
+        free(mono_buffer);
+        ESP_LOGE(TAG, "PCM output buffer is too small");
+        return ESP_ERR_INVALID_SIZE;
+    }
+
     uint32_t total_data_bytes = 0;
-    int16_t pcm_min = INT16_MAX;
-    int16_t pcm_max = INT16_MIN;
-    uint64_t abs_sum = 0;
-    uint32_t sample_count = 0;
-    uint32_t nonzero_count = 0;
-    uint32_t left_nonzero_count = 0;
-    uint32_t right_nonzero_count = 0;
-    uint32_t raw_nonzero_bytes = 0;
-    uint32_t clip_min_count = 0;
-    uint32_t clip_max_count = 0;
-    uint32_t read_calls = 0;
-    uint32_t short_reads = 0;
-    uint32_t min_read_bytes = UINT32_MAX;
-    uint32_t max_read_bytes = 0;
-    uint32_t max_read_ms = 0;
-    uint32_t max_write_ms = 0;
-    uint64_t total_read_ms = 0;
-    uint64_t total_write_ms = 0;
-    const uint32_t capture_start_ms = esp_log_timestamp();
     bool raw_diag_logged = false;
 
     while (total_data_bytes < output_bytes_target) {
@@ -397,25 +455,24 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
         const uint32_t read_start_ms = esp_log_timestamp();
         esp_err_t err = i2s_channel_read(s_i2s_rx, input_buffer, input_want, &bytes_read, pdMS_TO_TICKS(500));
         const uint32_t read_ms = esp_log_timestamp() - read_start_ms;
-        ++read_calls;
-        total_read_ms += read_ms;
-        if (read_ms > max_read_ms) {
-            max_read_ms = read_ms;
+        ++stats->read_calls;
+        stats->total_read_ms += read_ms;
+        if (read_ms > stats->max_read_ms) {
+            stats->max_read_ms = read_ms;
         }
         if ((err != ESP_OK) || (bytes_read == 0)) {
             free(input_buffer);
             free(mono_buffer);
-            fclose(file);
             return (err == ESP_OK) ? ESP_FAIL : err;
         }
         if (bytes_read < input_want) {
-            ++short_reads;
+            ++stats->short_reads;
         }
-        if (bytes_read < min_read_bytes) {
-            min_read_bytes = bytes_read;
+        if (bytes_read < stats->min_read_bytes) {
+            stats->min_read_bytes = bytes_read;
         }
-        if (bytes_read > max_read_bytes) {
-            max_read_bytes = bytes_read;
+        if (bytes_read > stats->max_read_bytes) {
+            stats->max_read_bytes = bytes_read;
         }
 
         if (!raw_diag_logged) {
@@ -425,7 +482,7 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
 
         for (size_t i = 0; i < bytes_read; ++i) {
             if (input_buffer[i] != 0) {
-                ++raw_nonzero_bytes;
+                ++stats->raw_nonzero_bytes;
             }
         }
 
@@ -441,61 +498,130 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
             mono_buffer[mono_bytes++] = (uint8_t)(((uint16_t)sample >> 8) & 0xFF);
 
             if (left != 0) {
-                ++left_nonzero_count;
+                ++stats->left_nonzero_count;
             }
             if (right != 0) {
-                ++right_nonzero_count;
+                ++stats->right_nonzero_count;
             }
-            if (sample < pcm_min) {
-                pcm_min = sample;
+            if (sample < stats->pcm_min) {
+                stats->pcm_min = sample;
             }
-            if (sample > pcm_max) {
-                pcm_max = sample;
+            if (sample > stats->pcm_max) {
+                stats->pcm_max = sample;
             }
             if (sample != 0) {
-                ++nonzero_count;
+                ++stats->nonzero_count;
             }
             if (sample == INT16_MIN) {
-                ++clip_min_count;
+                ++stats->clip_min_count;
             }
             if (sample == INT16_MAX) {
-                ++clip_max_count;
+                ++stats->clip_max_count;
             }
-            abs_sum += (uint64_t)((sample < 0) ? -(int32_t)sample : sample);
-            ++sample_count;
+            stats->abs_sum += (uint64_t)((sample < 0) ? -(int32_t)sample : sample);
+            ++stats->sample_count;
+        }
+
+        if (mono_bytes == 0) {
+            free(input_buffer);
+            free(mono_buffer);
+            return ESP_FAIL;
         }
 
         const uint32_t write_start_ms = esp_log_timestamp();
-        if ((mono_bytes == 0) || (fwrite(mono_buffer, 1, mono_bytes, file) != mono_bytes)) {
-            free(input_buffer);
-            free(mono_buffer);
-            fclose(file);
-            return ESP_FAIL;
+        if (file != NULL) {
+            if (fwrite(mono_buffer, 1, mono_bytes, file) != mono_bytes) {
+                free(input_buffer);
+                free(mono_buffer);
+                return ESP_FAIL;
+            }
+        } else if (output_buffer != NULL) {
+            memcpy(output_buffer + total_data_bytes, mono_buffer, mono_bytes);
+        } else {
+            size_t copied = 0;
+            while (copied < mono_bytes) {
+                const size_t absolute_offset = (size_t)total_data_bytes + copied;
+                const size_t block_index = absolute_offset / output_block_size;
+                const size_t block_offset = absolute_offset % output_block_size;
+                const size_t block_remaining = output_block_size - block_offset;
+                const size_t copy_now = ((mono_bytes - copied) > block_remaining) ? block_remaining : (mono_bytes - copied);
+                if ((block_index >= output_block_count) || (output_blocks[block_index] == NULL)) {
+                    free(input_buffer);
+                    free(mono_buffer);
+                    ESP_LOGE(TAG, "PCM output block is missing");
+                    return ESP_ERR_INVALID_SIZE;
+                }
+                memcpy(output_blocks[block_index] + block_offset, mono_buffer + copied, copy_now);
+                copied += copy_now;
+            }
         }
         const uint32_t write_ms = esp_log_timestamp() - write_start_ms;
-        total_write_ms += write_ms;
-        if (write_ms > max_write_ms) {
-            max_write_ms = write_ms;
+        *total_write_ms += write_ms;
+        if (write_ms > *max_write_ms) {
+            *max_write_ms = write_ms;
         }
         total_data_bytes += (uint32_t)mono_bytes;
     }
 
-    wav_header_fill(&header, total_data_bytes);
+    free(input_buffer);
+    free(mono_buffer);
+    if (bytes_written != NULL) {
+        *bytes_written = total_data_bytes;
+    }
+    return ESP_OK;
+}
+
+esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size_t *bytes_written)
+{
+    ESP_RETURN_ON_FALSE(audio_capture_is_ready(), ESP_ERR_INVALID_STATE, TAG, "audio capture not ready");
+    ESP_RETURN_ON_FALSE(path != NULL, ESP_ERR_INVALID_ARG, TAG, "path is null");
+
+    FILE *file = fopen(path, "wb");
+    ESP_RETURN_ON_FALSE(file != NULL, ESP_FAIL, TAG, "failed to open wav path");
+
+    wav_header_t header;
+    wav_header_fill(&header, 0);
+    if (fwrite(&header, 1, sizeof(header), file) != sizeof(header)) {
+        fclose(file);
+        return ESP_FAIL;
+    }
+
+    const uint32_t output_bytes_target =
+        (AUDIO_SAMPLE_RATE_HZ * (AUDIO_BITS_PER_SAMPLE / 8U) * duration_ms) / 1000U;
+    size_t total_data_bytes = 0;
+    audio_capture_stats_t stats;
+    audio_capture_stats_init(&stats);
+    uint32_t max_write_ms = 0;
+    uint64_t total_write_ms = 0;
+    const uint32_t capture_start_ms = esp_log_timestamp();
+
+    esp_err_t err = audio_capture_pcm_stream(
+        duration_ms,
+        file,
+        NULL,
+        NULL,
+        0,
+        0,
+        output_bytes_target,
+        &total_data_bytes,
+        &stats,
+        &total_write_ms,
+        &max_write_ms);
+    if (err != ESP_OK) {
+        fclose(file);
+        return err;
+    }
+
+    wav_header_fill(&header, (uint32_t)total_data_bytes);
     if (fseek(file, 0, SEEK_SET) != 0) {
-        free(input_buffer);
-        free(mono_buffer);
         fclose(file);
         return ESP_FAIL;
     }
     if (fwrite(&header, 1, sizeof(header), file) != sizeof(header)) {
-        free(input_buffer);
-        free(mono_buffer);
         fclose(file);
         return ESP_FAIL;
     }
     fclose(file);
-    free(input_buffer);
-    free(mono_buffer);
 
     if (bytes_written != NULL) {
         *bytes_written = total_data_bytes + sizeof(header);
@@ -503,31 +629,83 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
 
     const uint32_t elapsed_ms = esp_log_timestamp() - capture_start_ms;
     ESP_LOGI(TAG, "[OK] Recorded WAV: %lu bytes payload to %s", (unsigned long)total_data_bytes, path);
-    ESP_LOGI(TAG,
-        "[OK] Capture timing: target=%lu ms elapsed=%lu ms read_calls=%lu short_reads=%lu read_bytes=%lu..%lu read_ms_total=%llu max=%lu write_ms_total=%llu max=%lu",
-        (unsigned long)duration_ms,
-        (unsigned long)elapsed_ms,
-        (unsigned long)read_calls,
-        (unsigned long)short_reads,
-        (unsigned long)((min_read_bytes == UINT32_MAX) ? 0 : min_read_bytes),
-        (unsigned long)max_read_bytes,
-        (unsigned long long)total_read_ms,
-        (unsigned long)max_read_ms,
-        (unsigned long long)total_write_ms,
-        (unsigned long)max_write_ms);
-    ESP_LOGI(TAG,
-        "[OK] PCM stats: samples=%lu min=%d max=%d avg_abs=%u nonzero=%lu/%lu left_nonzero=%lu right_nonzero=%lu clip_min=%lu clip_max=%lu raw_nonzero_bytes=%lu",
-        (unsigned long)sample_count,
-        (sample_count > 0) ? pcm_min : 0,
-        (sample_count > 0) ? pcm_max : 0,
-        (sample_count > 0) ? (unsigned)(abs_sum / sample_count) : 0U,
-        (unsigned long)nonzero_count,
-        (unsigned long)sample_count,
-        (unsigned long)left_nonzero_count,
-        (unsigned long)right_nonzero_count,
-        (unsigned long)clip_min_count,
-        (unsigned long)clip_max_count,
-        (unsigned long)raw_nonzero_bytes);
+    audio_log_capture_summary("file", duration_ms, elapsed_ms, &stats, total_write_ms, max_write_ms);
+    return ESP_OK;
+}
+
+esp_err_t audio_capture_pcm_to_buffer(uint8_t *pcm_buffer, size_t buffer_size, uint32_t duration_ms, size_t *bytes_written)
+{
+    ESP_RETURN_ON_FALSE(audio_capture_is_ready(), ESP_ERR_INVALID_STATE, TAG, "audio capture not ready");
+    ESP_RETURN_ON_FALSE(pcm_buffer != NULL, ESP_ERR_INVALID_ARG, TAG, "PCM buffer is null");
+
+    audio_capture_stats_t stats;
+    audio_capture_stats_init(&stats);
+    uint32_t max_write_ms = 0;
+    uint64_t total_write_ms = 0;
+    size_t total_data_bytes = 0;
+    const uint32_t capture_start_ms = esp_log_timestamp();
+
+    esp_err_t err = audio_capture_pcm_stream(
+        duration_ms,
+        NULL,
+        pcm_buffer,
+        NULL,
+        0,
+        0,
+        buffer_size,
+        &total_data_bytes,
+        &stats,
+        &total_write_ms,
+        &max_write_ms);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (bytes_written != NULL) {
+        *bytes_written = total_data_bytes;
+    }
+
+    const uint32_t elapsed_ms = esp_log_timestamp() - capture_start_ms;
+    ESP_LOGI(TAG, "[OK] Recorded PCM: %lu bytes payload to RAM", (unsigned long)total_data_bytes);
+    audio_log_capture_summary("ram", duration_ms, elapsed_ms, &stats, total_write_ms, max_write_ms);
+    return ESP_OK;
+}
+
+esp_err_t audio_capture_pcm_to_blocks(uint8_t **blocks, size_t block_count, size_t block_size, uint32_t duration_ms, size_t *bytes_written)
+{
+    ESP_RETURN_ON_FALSE(audio_capture_is_ready(), ESP_ERR_INVALID_STATE, TAG, "audio capture not ready");
+    ESP_RETURN_ON_FALSE((blocks != NULL) && (block_count > 0) && (block_size > 0), ESP_ERR_INVALID_ARG, TAG, "bad PCM blocks");
+
+    audio_capture_stats_t stats;
+    audio_capture_stats_init(&stats);
+    uint32_t max_write_ms = 0;
+    uint64_t total_write_ms = 0;
+    size_t total_data_bytes = 0;
+    const uint32_t capture_start_ms = esp_log_timestamp();
+
+    esp_err_t err = audio_capture_pcm_stream(
+        duration_ms,
+        NULL,
+        NULL,
+        blocks,
+        block_count,
+        block_size,
+        block_count * block_size,
+        &total_data_bytes,
+        &stats,
+        &total_write_ms,
+        &max_write_ms);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (bytes_written != NULL) {
+        *bytes_written = total_data_bytes;
+    }
+
+    const uint32_t elapsed_ms = esp_log_timestamp() - capture_start_ms;
+    ESP_LOGI(TAG, "[OK] Recorded PCM: %lu bytes payload to RAM blocks", (unsigned long)total_data_bytes);
+    audio_log_capture_summary("ram-blocks", duration_ms, elapsed_ms, &stats, total_write_ms, max_write_ms);
     return ESP_OK;
 }
 
@@ -607,6 +785,123 @@ esp_err_t audio_play_wav_file(const char *path)
     free(mono_buffer);
     free(stereo_buffer);
     ESP_LOGI(TAG, "[PLAY] done elapsed=%lu ms payload=%lu", (unsigned long)(esp_log_timestamp() - start_ms), (unsigned long)played_bytes);
+    return ESP_OK;
+}
+
+esp_err_t audio_play_pcm_buffer(const uint8_t *pcm_buffer, size_t pcm_bytes)
+{
+    ESP_RETURN_ON_FALSE(s_audio_ready && (s_i2s_tx != NULL), ESP_ERR_INVALID_STATE, TAG, "audio playback not ready");
+    ESP_RETURN_ON_FALSE(pcm_buffer != NULL, ESP_ERR_INVALID_ARG, TAG, "PCM buffer is null");
+    ESP_RETURN_ON_FALSE((pcm_bytes > 0) && ((pcm_bytes % 2U) == 0), ESP_ERR_INVALID_ARG, TAG, "bad PCM byte count");
+
+    uint8_t *stereo_buffer = malloc(AUDIO_INPUT_BLOCK_BYTES);
+    ESP_RETURN_ON_FALSE(stereo_buffer != NULL, ESP_ERR_NO_MEM, TAG, "PCM playback buffer alloc failed");
+
+    size_t offset = 0;
+    uint32_t played_bytes = 0;
+    const uint32_t start_ms = esp_log_timestamp();
+
+    ESP_LOGI(TAG, "[PLAY] start RAM PCM payload=%u", (unsigned)pcm_bytes);
+    while (offset < pcm_bytes) {
+        const size_t remaining = pcm_bytes - offset;
+        const size_t mono_bytes = (remaining > AUDIO_MONO_BLOCK_BYTES) ? AUDIO_MONO_BLOCK_BYTES : remaining;
+        size_t stereo_bytes = 0;
+
+        for (size_t i = 0; (i + 1U) < mono_bytes; i += 2U) {
+            const uint8_t lo = pcm_buffer[offset + i];
+            const uint8_t hi = pcm_buffer[offset + i + 1U];
+            stereo_buffer[stereo_bytes++] = lo;
+            stereo_buffer[stereo_bytes++] = hi;
+            stereo_buffer[stereo_bytes++] = lo;
+            stereo_buffer[stereo_bytes++] = hi;
+        }
+
+        size_t bytes_written = 0;
+        esp_err_t err = i2s_channel_write(s_i2s_tx, stereo_buffer, stereo_bytes, &bytes_written, pdMS_TO_TICKS(1000));
+        if (err != ESP_OK) {
+            free(stereo_buffer);
+            return err;
+        }
+        if (bytes_written != stereo_bytes) {
+            ESP_LOGW(TAG, "[PLAY] RAM PCM short write: %u/%u", (unsigned)bytes_written, (unsigned)stereo_bytes);
+        }
+
+        offset += mono_bytes;
+        played_bytes += (uint32_t)mono_bytes;
+    }
+
+    free(stereo_buffer);
+    ESP_LOGI(TAG, "[PLAY] done RAM PCM elapsed=%lu ms payload=%lu", (unsigned long)(esp_log_timestamp() - start_ms), (unsigned long)played_bytes);
+    return ESP_OK;
+}
+
+esp_err_t audio_play_pcm_blocks(uint8_t *const *blocks, size_t block_count, size_t block_size, size_t pcm_bytes)
+{
+    ESP_RETURN_ON_FALSE(s_audio_ready && (s_i2s_tx != NULL), ESP_ERR_INVALID_STATE, TAG, "audio playback not ready");
+    ESP_RETURN_ON_FALSE((blocks != NULL) && (block_count > 0) && (block_size > 0), ESP_ERR_INVALID_ARG, TAG, "bad PCM blocks");
+    ESP_RETURN_ON_FALSE((pcm_bytes > 0) && ((pcm_bytes % 2U) == 0), ESP_ERR_INVALID_ARG, TAG, "bad PCM byte count");
+
+    uint8_t *mono_buffer = malloc(AUDIO_MONO_BLOCK_BYTES);
+    uint8_t *stereo_buffer = malloc(AUDIO_INPUT_BLOCK_BYTES);
+    if ((mono_buffer == NULL) || (stereo_buffer == NULL)) {
+        free(mono_buffer);
+        free(stereo_buffer);
+        return ESP_ERR_NO_MEM;
+    }
+
+    size_t offset = 0;
+    uint32_t played_bytes = 0;
+    const uint32_t start_ms = esp_log_timestamp();
+
+    ESP_LOGI(TAG, "[PLAY] start RAM block PCM payload=%u", (unsigned)pcm_bytes);
+    while (offset < pcm_bytes) {
+        const size_t remaining = pcm_bytes - offset;
+        const size_t mono_bytes = (remaining > AUDIO_MONO_BLOCK_BYTES) ? AUDIO_MONO_BLOCK_BYTES : remaining;
+        size_t copied = 0;
+
+        while (copied < mono_bytes) {
+            const size_t absolute_offset = offset + copied;
+            const size_t block_index = absolute_offset / block_size;
+            const size_t block_offset = absolute_offset % block_size;
+            const size_t block_remaining = block_size - block_offset;
+            const size_t copy_now = ((mono_bytes - copied) > block_remaining) ? block_remaining : (mono_bytes - copied);
+            if ((block_index >= block_count) || (blocks[block_index] == NULL)) {
+                free(mono_buffer);
+                free(stereo_buffer);
+                return ESP_ERR_INVALID_SIZE;
+            }
+            memcpy(mono_buffer + copied, blocks[block_index] + block_offset, copy_now);
+            copied += copy_now;
+        }
+
+        size_t stereo_bytes = 0;
+        for (size_t i = 0; (i + 1U) < mono_bytes; i += 2U) {
+            const uint8_t lo = mono_buffer[i];
+            const uint8_t hi = mono_buffer[i + 1U];
+            stereo_buffer[stereo_bytes++] = lo;
+            stereo_buffer[stereo_bytes++] = hi;
+            stereo_buffer[stereo_bytes++] = lo;
+            stereo_buffer[stereo_bytes++] = hi;
+        }
+
+        size_t bytes_written = 0;
+        esp_err_t err = i2s_channel_write(s_i2s_tx, stereo_buffer, stereo_bytes, &bytes_written, pdMS_TO_TICKS(1000));
+        if (err != ESP_OK) {
+            free(mono_buffer);
+            free(stereo_buffer);
+            return err;
+        }
+        if (bytes_written != stereo_bytes) {
+            ESP_LOGW(TAG, "[PLAY] RAM block PCM short write: %u/%u", (unsigned)bytes_written, (unsigned)stereo_bytes);
+        }
+
+        offset += mono_bytes;
+        played_bytes += (uint32_t)mono_bytes;
+    }
+
+    free(mono_buffer);
+    free(stereo_buffer);
+    ESP_LOGI(TAG, "[PLAY] done RAM block PCM elapsed=%lu ms payload=%lu", (unsigned long)(esp_log_timestamp() - start_ms), (unsigned long)played_bytes);
     return ESP_OK;
 }
 
