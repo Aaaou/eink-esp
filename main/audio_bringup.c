@@ -10,6 +10,7 @@
 #include "sdkconfig.h"
 
 #include <limits.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -24,7 +25,7 @@ static bool s_audio_ready;
 #define AUDIO_BITS_PER_SAMPLE 16
 #define AUDIO_CHANNELS 1
 #define AUDIO_FRAME_BYTES 4
-#define AUDIO_INPUT_BLOCK_BYTES 1024
+#define AUDIO_INPUT_BLOCK_BYTES 4096
 #define AUDIO_I2S_MCLK_MULTIPLE I2S_MCLK_MULTIPLE_256
 
 #define ES8311_SYSTEM_REG0D 0x0D
@@ -331,15 +332,24 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
     FILE *file = fopen(path, "wb");
     ESP_RETURN_ON_FALSE(file != NULL, ESP_FAIL, TAG, "failed to open wav path");
 
+    uint8_t *input_buffer = malloc(AUDIO_INPUT_BLOCK_BYTES);
+    uint8_t *mono_buffer = malloc(AUDIO_INPUT_BLOCK_BYTES / 2);
+    if ((input_buffer == NULL) || (mono_buffer == NULL)) {
+        free(input_buffer);
+        free(mono_buffer);
+        fclose(file);
+        return ESP_ERR_NO_MEM;
+    }
+
     wav_header_t header;
     wav_header_fill(&header, 0);
     if (fwrite(&header, 1, sizeof(header), file) != sizeof(header)) {
+        free(input_buffer);
+        free(mono_buffer);
         fclose(file);
         return ESP_FAIL;
     }
 
-    uint8_t input_buffer[AUDIO_INPUT_BLOCK_BYTES];
-    uint8_t mono_buffer[AUDIO_INPUT_BLOCK_BYTES / 2];
     const uint32_t output_bytes_target =
         (AUDIO_SAMPLE_RATE_HZ * (AUDIO_BITS_PER_SAMPLE / 8U) * duration_ms) / 1000U;
     uint32_t total_data_bytes = 0;
@@ -353,6 +363,15 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
     uint32_t raw_nonzero_bytes = 0;
     uint32_t clip_min_count = 0;
     uint32_t clip_max_count = 0;
+    uint32_t read_calls = 0;
+    uint32_t short_reads = 0;
+    uint32_t min_read_bytes = UINT32_MAX;
+    uint32_t max_read_bytes = 0;
+    uint32_t max_read_ms = 0;
+    uint32_t max_write_ms = 0;
+    uint64_t total_read_ms = 0;
+    uint64_t total_write_ms = 0;
+    const uint32_t capture_start_ms = esp_log_timestamp();
     bool raw_diag_logged = false;
 
     while (total_data_bytes < output_bytes_target) {
@@ -362,10 +381,28 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
             : (size_t)output_remaining;
         const size_t input_want = mono_want * 2;
         size_t bytes_read = 0;
+        const uint32_t read_start_ms = esp_log_timestamp();
         esp_err_t err = i2s_channel_read(s_i2s_rx, input_buffer, input_want, &bytes_read, pdMS_TO_TICKS(500));
+        const uint32_t read_ms = esp_log_timestamp() - read_start_ms;
+        ++read_calls;
+        total_read_ms += read_ms;
+        if (read_ms > max_read_ms) {
+            max_read_ms = read_ms;
+        }
         if ((err != ESP_OK) || (bytes_read == 0)) {
+            free(input_buffer);
+            free(mono_buffer);
             fclose(file);
             return (err == ESP_OK) ? ESP_FAIL : err;
+        }
+        if (bytes_read < input_want) {
+            ++short_reads;
+        }
+        if (bytes_read < min_read_bytes) {
+            min_read_bytes = bytes_read;
+        }
+        if (bytes_read > max_read_bytes) {
+            max_read_bytes = bytes_read;
         }
 
         if (!raw_diag_logged) {
@@ -415,29 +452,56 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
             ++sample_count;
         }
 
+        const uint32_t write_start_ms = esp_log_timestamp();
         if ((mono_bytes == 0) || (fwrite(mono_buffer, 1, mono_bytes, file) != mono_bytes)) {
+            free(input_buffer);
+            free(mono_buffer);
             fclose(file);
             return ESP_FAIL;
+        }
+        const uint32_t write_ms = esp_log_timestamp() - write_start_ms;
+        total_write_ms += write_ms;
+        if (write_ms > max_write_ms) {
+            max_write_ms = write_ms;
         }
         total_data_bytes += (uint32_t)mono_bytes;
     }
 
     wav_header_fill(&header, total_data_bytes);
     if (fseek(file, 0, SEEK_SET) != 0) {
+        free(input_buffer);
+        free(mono_buffer);
         fclose(file);
         return ESP_FAIL;
     }
     if (fwrite(&header, 1, sizeof(header), file) != sizeof(header)) {
+        free(input_buffer);
+        free(mono_buffer);
         fclose(file);
         return ESP_FAIL;
     }
     fclose(file);
+    free(input_buffer);
+    free(mono_buffer);
 
     if (bytes_written != NULL) {
         *bytes_written = total_data_bytes + sizeof(header);
     }
 
+    const uint32_t elapsed_ms = esp_log_timestamp() - capture_start_ms;
     ESP_LOGI(TAG, "[OK] Recorded WAV: %lu bytes payload to %s", (unsigned long)total_data_bytes, path);
+    ESP_LOGI(TAG,
+        "[OK] Capture timing: target=%lu ms elapsed=%lu ms read_calls=%lu short_reads=%lu read_bytes=%lu..%lu read_ms_total=%llu max=%lu write_ms_total=%llu max=%lu",
+        (unsigned long)duration_ms,
+        (unsigned long)elapsed_ms,
+        (unsigned long)read_calls,
+        (unsigned long)short_reads,
+        (unsigned long)((min_read_bytes == UINT32_MAX) ? 0 : min_read_bytes),
+        (unsigned long)max_read_bytes,
+        (unsigned long long)total_read_ms,
+        (unsigned long)max_read_ms,
+        (unsigned long long)total_write_ms,
+        (unsigned long)max_write_ms);
     ESP_LOGI(TAG,
         "[OK] PCM stats: samples=%lu min=%d max=%d avg_abs=%u nonzero=%lu/%lu left_nonzero=%lu right_nonzero=%lu clip_min=%lu clip_max=%lu raw_nonzero_bytes=%lu",
         (unsigned long)sample_count,
