@@ -12,6 +12,7 @@ typedef struct {
     size_t file_size;
     size_t expected_file_size;
     uint32_t record_id;
+    uint32_t active_record_id;
     uint32_t duration_ms;
     uint32_t sample_rate_hz;
     char path[40];

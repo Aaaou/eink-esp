@@ -29,10 +29,11 @@ static void print_status(void)
 {
     recording_status_t status = { 0 };
     recording_service_get_status(&status);
-    printf("[serial] recording=%s has_recording=%s record_id=%u file_size=%u expected=%u duration_ms=%u sample_rate=%u path=%s name=%s\r\n",
+    printf("[serial] recording=%s has_recording=%s completed_id=%u active_id=%u file_size=%u expected=%u duration_ms=%u sample_rate=%u path=%s name=%s\r\n",
         status.recording ? "true" : "false",
         status.has_recording ? "true" : "false",
         (unsigned)status.record_id,
+        (unsigned)status.active_record_id,
         (unsigned)status.file_size,
         (unsigned)status.expected_file_size,
         (unsigned)status.duration_ms,
@@ -58,7 +59,7 @@ esp_err_t serial_export_service_export_recording(void)
         return ESP_FAIL;
     }
 
-    printf("[serial] export begin record_id=%u path=%s name=%s size=%u expected=%u encoding=base64\r\n",
+    printf("[serial] export begin completed_id=%u path=%s name=%s size=%u expected=%u encoding=base64\r\n",
         (unsigned)status.record_id,
         path,
         status.download_name,
