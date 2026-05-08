@@ -29,18 +29,24 @@ static void print_status(void)
 {
     recording_status_t status = { 0 };
     recording_service_get_status(&status);
-    printf("[serial] recording=%s has_recording=%s file_size=%u duration_ms=%u sample_rate=%u\r\n",
+    printf("[serial] recording=%s has_recording=%s record_id=%u file_size=%u expected=%u duration_ms=%u sample_rate=%u path=%s name=%s\r\n",
         status.recording ? "true" : "false",
         status.has_recording ? "true" : "false",
+        (unsigned)status.record_id,
         (unsigned)status.file_size,
+        (unsigned)status.expected_file_size,
         (unsigned)status.duration_ms,
-        (unsigned)status.sample_rate_hz);
+        (unsigned)status.sample_rate_hz,
+        status.path,
+        status.download_name);
 }
 
 esp_err_t serial_export_service_export_recording(void)
 {
     const char *path = recording_service_get_file_path();
+    recording_status_t status = { 0 };
     struct stat st;
+    recording_service_get_status(&status);
     if (stat(path, &st) != 0) {
         printf("[serial] export failed: recording file not found at %s\r\n", path);
         return ESP_ERR_NOT_FOUND;
@@ -52,7 +58,12 @@ esp_err_t serial_export_service_export_recording(void)
         return ESP_FAIL;
     }
 
-    printf("[serial] export begin path=%s size=%u encoding=base64\r\n", path, (unsigned)st.st_size);
+    printf("[serial] export begin record_id=%u path=%s name=%s size=%u expected=%u encoding=base64\r\n",
+        (unsigned)status.record_id,
+        path,
+        status.download_name,
+        (unsigned)st.st_size,
+        (unsigned)status.expected_file_size);
 
     unsigned char raw[SERIAL_RAW_CHUNK_SIZE];
     unsigned char b64[SERIAL_B64_CHUNK_SIZE];
