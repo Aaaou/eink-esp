@@ -47,6 +47,7 @@ static bool s_audio_ready;
 typedef struct {
     int16_t pcm_min;
     int16_t pcm_max;
+    int64_t sample_sum;
     uint64_t abs_sum;
     uint32_t sample_count;
     uint32_t nonzero_count;
@@ -361,6 +362,7 @@ static void audio_capture_stats_init(audio_capture_stats_t *stats)
 {
     stats->pcm_min = INT16_MAX;
     stats->pcm_max = INT16_MIN;
+    stats->sample_sum = 0;
     stats->abs_sum = 0;
     stats->sample_count = 0;
     stats->nonzero_count = 0;
@@ -398,11 +400,12 @@ static void audio_log_capture_summary(
         (unsigned long long)total_write_ms,
         (unsigned long)max_write_ms);
     ESP_LOGI(TAG,
-        "[OK] PCM stats (%s): samples=%lu min=%d max=%d avg_abs=%u nonzero=%lu/%lu left_nonzero=%lu right_nonzero=%lu clip_min=%lu clip_max=%lu raw_nonzero_bytes=%lu",
+        "[OK] PCM stats (%s): samples=%lu min=%d max=%d mean=%d avg_abs=%u nonzero=%lu/%lu left_nonzero=%lu right_nonzero=%lu clip_min=%lu clip_max=%lu raw_nonzero_bytes=%lu",
         target,
         (unsigned long)stats->sample_count,
         (stats->sample_count > 0) ? stats->pcm_min : 0,
         (stats->sample_count > 0) ? stats->pcm_max : 0,
+        (stats->sample_count > 0) ? (int)(stats->sample_sum / (int64_t)stats->sample_count) : 0,
         (stats->sample_count > 0) ? (unsigned)(stats->abs_sum / stats->sample_count) : 0U,
         (unsigned long)stats->nonzero_count,
         (unsigned long)stats->sample_count,
@@ -519,6 +522,7 @@ static esp_err_t audio_capture_pcm_stream(
             if (sample == INT16_MAX) {
                 ++stats->clip_max_count;
             }
+            stats->sample_sum += sample;
             stats->abs_sum += (uint64_t)((sample < 0) ? -(int32_t)sample : sample);
             ++stats->sample_count;
         }
@@ -732,7 +736,7 @@ esp_err_t audio_play_wav_file(const char *path)
     if (s_codec != NULL) {
         int volume_set = 0;
         ESP_RETURN_ON_ERROR(es8311_voice_mute(s_codec, false), TAG, "ES8311 unmute failed");
-        ESP_RETURN_ON_ERROR(es8311_voice_volume_set(s_codec, 85, &volume_set), TAG, "ES8311 volume failed");
+        ESP_RETURN_ON_ERROR(es8311_voice_volume_set(s_codec, CONFIG_AUDIO_PLAYBACK_VOLUME, &volume_set), TAG, "ES8311 volume failed");
         ESP_LOGI(TAG, "[PLAY] ES8311 output volume=%d", volume_set);
     }
 
@@ -853,6 +857,10 @@ esp_err_t audio_play_pcm_blocks(uint8_t *const *blocks, size_t block_count, size
     size_t offset = 0;
     uint32_t played_bytes = 0;
     const uint32_t start_ms = esp_log_timestamp();
+#if CONFIG_AUDIO_LOOPBACK_DC_BLOCK
+    int32_t dc_x_prev = 0;
+    int32_t dc_y_prev = 0;
+#endif
 
     ESP_LOGI(TAG, "[PLAY] start RAM block PCM payload=%u", (unsigned)pcm_bytes);
     while (offset < pcm_bytes) {
@@ -877,8 +885,21 @@ esp_err_t audio_play_pcm_blocks(uint8_t *const *blocks, size_t block_count, size
 
         size_t stereo_bytes = 0;
         for (size_t i = 0; (i + 1U) < mono_bytes; i += 2U) {
-            const uint8_t lo = mono_buffer[i];
-            const uint8_t hi = mono_buffer[i + 1U];
+            int16_t sample = (int16_t)((uint16_t)mono_buffer[i] | ((uint16_t)mono_buffer[i + 1U] << 8));
+#if CONFIG_AUDIO_LOOPBACK_DC_BLOCK
+            const int32_t x = sample;
+            int32_t y = x - dc_x_prev + ((dc_y_prev * 32604) >> 15);
+            dc_x_prev = x;
+            dc_y_prev = y;
+            if (y > INT16_MAX) {
+                y = INT16_MAX;
+            } else if (y < INT16_MIN) {
+                y = INT16_MIN;
+            }
+            sample = (int16_t)y;
+#endif
+            const uint8_t lo = (uint8_t)(sample & 0xFF);
+            const uint8_t hi = (uint8_t)(((uint16_t)sample >> 8) & 0xFF);
             stereo_buffer[stereo_bytes++] = lo;
             stereo_buffer[stereo_bytes++] = hi;
             stereo_buffer[stereo_bytes++] = lo;
@@ -914,7 +935,7 @@ esp_err_t audio_play_test_tone(uint32_t duration_ms)
     if (s_codec != NULL) {
         int volume_set = 0;
         ESP_RETURN_ON_ERROR(es8311_voice_mute(s_codec, false), TAG, "ES8311 unmute failed");
-        ESP_RETURN_ON_ERROR(es8311_voice_volume_set(s_codec, 85, &volume_set), TAG, "ES8311 volume failed");
+        ESP_RETURN_ON_ERROR(es8311_voice_volume_set(s_codec, CONFIG_AUDIO_PLAYBACK_VOLUME, &volume_set), TAG, "ES8311 volume failed");
         ESP_LOGI(TAG, "[PLAY] ES8311 output volume=%d", volume_set);
     }
 

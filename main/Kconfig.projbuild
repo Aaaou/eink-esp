@@ -115,6 +115,24 @@ config AUDIO_ES8311_ADC_VOLUME_REG17
         ES8311 ADC digital volume written to register 0x17. The previous
         bring-up value was 200 (0xC8), which can clip loud analog input.
 
+config AUDIO_PLAYBACK_VOLUME
+    int "ES8311 playback volume"
+    range 0 100
+    default 65
+    help
+        Volume used for startup tone and local RAM loopback playback.
+        Lower this while judging microphone quality so the speaker path does
+        not add extra distortion.
+
+config AUDIO_LOOPBACK_DC_BLOCK
+    bool "Apply DC blocker before RAM loopback playback"
+    default y
+    help
+        Remove DC/very low frequency offset from recorded PCM during local
+        RAM loopback playback. This does not change the captured statistics;
+        it only prevents low-frequency bias from sounding like speaker
+        distortion during bring-up.
+
 config AUDIO_BOOT_TEST_TONE
     bool "Play speaker test tone on boot"
     default y
