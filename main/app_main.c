@@ -1,9 +1,12 @@
+#include "audio_bringup.h"
 #include "board_bringup.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "portal_service.h"
+#include "project_defaults.h"
 #include "recording_service.h"
+#include "sdkconfig.h"
 #include "storage_service.h"
 
 static const char *TAG = "app_main";
@@ -24,6 +27,13 @@ void app_main(void)
         ESP_LOGE(TAG, "[!] Initialization failed: %s", esp_err_to_name(err));
         return;
     }
+
+#if CONFIG_AUDIO_BOOT_TEST_TONE
+    err = audio_play_test_tone(CONFIG_AUDIO_BOOT_TEST_TONE_MS);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "[!] Boot speaker test tone failed: %s", esp_err_to_name(err));
+    }
+#endif
 
     ESP_ERROR_CHECK(storage_service_init());
     ESP_ERROR_CHECK(portal_service_init());

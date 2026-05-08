@@ -11,3 +11,4 @@ esp_err_t audio_bringup_run(board_probe_result_t *probe);
 bool audio_capture_is_ready(void);
 esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size_t *bytes_written);
 esp_err_t audio_play_wav_file(const char *path);
+esp_err_t audio_play_test_tone(uint32_t duration_ms);

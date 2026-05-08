@@ -609,3 +609,58 @@ esp_err_t audio_play_wav_file(const char *path)
     ESP_LOGI(TAG, "[PLAY] done elapsed=%lu ms payload=%lu", (unsigned long)(esp_log_timestamp() - start_ms), (unsigned long)played_bytes);
     return ESP_OK;
 }
+
+esp_err_t audio_play_test_tone(uint32_t duration_ms)
+{
+    ESP_RETURN_ON_FALSE(s_audio_ready && (s_i2s_tx != NULL), ESP_ERR_INVALID_STATE, TAG, "audio playback not ready");
+    ESP_RETURN_ON_FALSE(duration_ms > 0, ESP_ERR_INVALID_ARG, TAG, "test tone duration is zero");
+
+    if (s_codec != NULL) {
+        int volume_set = 0;
+        ESP_RETURN_ON_ERROR(es8311_voice_mute(s_codec, false), TAG, "ES8311 unmute failed");
+        ESP_RETURN_ON_ERROR(es8311_voice_volume_set(s_codec, 85, &volume_set), TAG, "ES8311 volume failed");
+        ESP_LOGI(TAG, "[PLAY] ES8311 output volume=%d", volume_set);
+    }
+
+    int16_t *stereo_buffer = malloc(AUDIO_INPUT_BLOCK_BYTES);
+    ESP_RETURN_ON_FALSE(stereo_buffer != NULL, ESP_ERR_NO_MEM, TAG, "test tone buffer alloc failed");
+
+    const uint32_t total_frames = (AUDIO_SAMPLE_RATE_HZ * duration_ms) / 1000U;
+    uint32_t frames_done = 0;
+    uint32_t phase = 0;
+    const uint32_t phase_step_a = ((uint32_t)880U << 16) / AUDIO_SAMPLE_RATE_HZ;
+    const uint32_t phase_step_b = ((uint32_t)1320U << 16) / AUDIO_SAMPLE_RATE_HZ;
+    const uint32_t frames_per_buffer = AUDIO_INPUT_BLOCK_BYTES / 4U;
+    const uint32_t split_frame = total_frames / 2U;
+    const uint32_t start_ms = esp_log_timestamp();
+
+    ESP_LOGI(TAG, "[PLAY] boot speaker test tone start duration=%lu ms", (unsigned long)duration_ms);
+    while (frames_done < total_frames) {
+        const uint32_t frames_remaining = total_frames - frames_done;
+        const uint32_t frames_this = (frames_remaining > frames_per_buffer) ? frames_per_buffer : frames_remaining;
+        const uint32_t phase_step = (frames_done < split_frame) ? phase_step_a : phase_step_b;
+
+        for (uint32_t i = 0; i < frames_this; ++i) {
+            phase += phase_step;
+            const int16_t sample = (phase & 0x8000U) ? 9000 : -9000;
+            stereo_buffer[(i * 2U) + 0U] = sample;
+            stereo_buffer[(i * 2U) + 1U] = sample;
+        }
+
+        size_t bytes_written = 0;
+        const size_t bytes_to_write = frames_this * 4U;
+        esp_err_t err = i2s_channel_write(s_i2s_tx, stereo_buffer, bytes_to_write, &bytes_written, pdMS_TO_TICKS(1000));
+        if (err != ESP_OK) {
+            free(stereo_buffer);
+            return err;
+        }
+        if (bytes_written != bytes_to_write) {
+            ESP_LOGW(TAG, "[PLAY] test tone short write: %u/%u", (unsigned)bytes_written, (unsigned)bytes_to_write);
+        }
+        frames_done += frames_this;
+    }
+
+    free(stereo_buffer);
+    ESP_LOGI(TAG, "[PLAY] boot speaker test tone done elapsed=%lu ms", (unsigned long)(esp_log_timestamp() - start_ms));
+    return ESP_OK;
+}

@@ -98,6 +98,22 @@ config AUDIO_RECORD_SAMPLE_RATE
     help
         Sample rate used for I2S capture and WAV export.
 
+config AUDIO_BOOT_TEST_TONE
+    bool "Play speaker test tone on boot"
+    default y
+    help
+        Play a short generated tone after ES8311 and I2S initialization. This
+        isolates the playback path from microphone capture while bringing up
+        a new board.
+
+config AUDIO_BOOT_TEST_TONE_MS
+    int "Boot speaker test tone duration (ms)"
+    range 100 3000
+    default 700
+    depends on AUDIO_BOOT_TEST_TONE
+    help
+        Duration of the generated speaker test tone played during startup.
+
 config AUDIO_RECORD_I2S_RAW_DIAG
     bool "Log raw I2S capture diagnostics"
     default y
