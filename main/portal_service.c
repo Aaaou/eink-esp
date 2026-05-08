@@ -50,6 +50,7 @@ typedef struct {
     TaskHandle_t autoconnect_task;
     portal_state_t state;
     bool wifi_initialized;
+    bool wifi_started;
     bool portal_enabled;
     bool sta_connected;
     bool autoconnect_requested;
@@ -297,6 +298,49 @@ static void portal_load_credentials(void)
     nvs_close(handle);
 }
 
+static esp_err_t portal_set_ap_mode(bool with_sta)
+{
+    wifi_mode_t mode = with_sta ? WIFI_MODE_APSTA : WIFI_MODE_AP;
+
+    return esp_wifi_set_mode(mode);
+}
+
+static esp_err_t portal_scan_networks(uint16_t *count, wifi_ap_record_t *records)
+{
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    wifi_scan_config_t scan_cfg = {
+        .show_hidden = false,
+    };
+    bool restore_ap_only = false;
+    esp_err_t err;
+
+    ESP_RETURN_ON_FALSE((count != NULL) && (records != NULL), ESP_ERR_INVALID_ARG, TAG, "scan args invalid");
+    ESP_RETURN_ON_ERROR(esp_wifi_get_mode(&mode), TAG, "get wifi mode failed");
+
+    if (mode == WIFI_MODE_AP) {
+        ESP_LOGI(TAG, "[WiFi] Temporarily enabling STA for scan");
+        ESP_RETURN_ON_ERROR(portal_set_ap_mode(true), TAG, "set APSTA for scan failed");
+        restore_ap_only = true;
+        vTaskDelay(pdMS_TO_TICKS(120));
+    }
+
+    err = esp_wifi_scan_start(&scan_cfg, true);
+    if (err == ESP_OK) {
+        err = esp_wifi_scan_get_ap_records(count, records);
+    }
+
+    if (restore_ap_only && !s_portal.sta_connected) {
+        esp_err_t restore_err = portal_set_ap_mode(false);
+        if (restore_err != ESP_OK) {
+            ESP_LOGW(TAG, "[WiFi] Failed to restore AP-only mode after scan: %s", esp_err_to_name(restore_err));
+        } else {
+            ESP_LOGI(TAG, "[WiFi] Restored AP-only mode after scan");
+        }
+    }
+
+    return err;
+}
+
 static esp_err_t portal_connect_sta(const char *ssid, const char *password)
 {
     wifi_config_t sta_cfg = {
@@ -307,6 +351,11 @@ static esp_err_t portal_connect_sta(const char *ssid, const char *password)
         },
     };
 
+    if (!s_portal.wifi_started) {
+        ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi start failed");
+        s_portal.wifi_started = true;
+    }
+    ESP_RETURN_ON_ERROR(portal_set_ap_mode(true), TAG, "set APSTA mode failed");
     portal_copy_str((char *)sta_cfg.sta.ssid, ssid, sizeof(sta_cfg.sta.ssid));
     portal_copy_str((char *)sta_cfg.sta.password, password, sizeof(sta_cfg.sta.password));
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg), TAG, "set sta config failed");
@@ -321,18 +370,19 @@ static void portal_autoconnect_task(void *arg)
     while (true) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-        if (CONFIG_AUDIO_PORTAL_STA_AUTOCONNECT_DELAY_MS > 0) {
-            ESP_LOGI(TAG, "[WiFi] Saved STA autoconnect waits %d ms; AP stays discoverable first",
-                CONFIG_AUDIO_PORTAL_STA_AUTOCONNECT_DELAY_MS);
-            vTaskDelay(pdMS_TO_TICKS(CONFIG_AUDIO_PORTAL_STA_AUTOCONNECT_DELAY_MS));
-        }
-
         portal_load_credentials();
         if (!s_portal.credentials_loaded) {
             ESP_LOGI(TAG, "[WiFi] No saved STA credentials; stay in AP portal mode");
             s_portal.autoconnect_requested = false;
             continue;
         }
+
+        if (CONFIG_AUDIO_PORTAL_STA_AUTOCONNECT_DELAY_MS > 0) {
+            ESP_LOGI(TAG, "[WiFi] Saved STA autoconnect waits %d ms; AP stays discoverable first",
+                CONFIG_AUDIO_PORTAL_STA_AUTOCONNECT_DELAY_MS);
+            vTaskDelay(pdMS_TO_TICKS(CONFIG_AUDIO_PORTAL_STA_AUTOCONNECT_DELAY_MS));
+        }
+
         if (s_portal.sta_connected) {
             s_portal.autoconnect_requested = false;
             continue;
@@ -396,8 +446,6 @@ static esp_err_t portal_wifi_init(void)
     ESP_RETURN_ON_ERROR(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, portal_event_handler, NULL), TAG, "wifi handler failed");
     ESP_RETURN_ON_ERROR(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, portal_event_handler, NULL), TAG, "ip handler failed");
     ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "wifi storage failed");
-    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "wifi sta mode failed");
-    ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi start failed");
 
     xTaskCreate(portal_autoconnect_task, "portal_auto_sta", 4096, NULL, 3, &s_portal.autoconnect_task);
 
@@ -458,17 +506,13 @@ static const char *auth_name(wifi_auth_mode_t auth)
 static esp_err_t scan_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "[HTTP] GET /api/scan");
-    wifi_scan_config_t scan_cfg = {
-        .show_hidden = false,
-    };
     wifi_ap_record_t records[PORTAL_MAX_SCAN_RESULTS] = { 0 };
     uint16_t count = PORTAL_MAX_SCAN_RESULTS;
     cJSON *root = cJSON_CreateObject();
     cJSON *list = cJSON_CreateArray();
     esp_err_t err;
 
-    ESP_RETURN_ON_ERROR(esp_wifi_scan_start(&scan_cfg, true), TAG, "scan failed");
-    ESP_RETURN_ON_ERROR(esp_wifi_scan_get_ap_records(&count, records), TAG, "scan records failed");
+    ESP_RETURN_ON_ERROR(portal_scan_networks(&count, records), TAG, "scan failed");
 
     for (uint16_t i = 0; i < count; ++i) {
         cJSON *item = cJSON_CreateObject();
@@ -745,13 +789,23 @@ static esp_err_t portal_enable_ap(void)
     portal_copy_str((char *)ap_cfg.ap.ssid, CONFIG_AUDIO_PORTAL_AP_SSID, sizeof(ap_cfg.ap.ssid));
     ap_cfg.ap.ssid_len = strlen(CONFIG_AUDIO_PORTAL_AP_SSID);
 
-    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_APSTA), TAG, "set APSTA mode failed");
+    if (!s_portal.wifi_started) {
+        ESP_RETURN_ON_ERROR(portal_set_ap_mode(false), TAG, "set AP mode failed");
+        ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi start failed");
+        s_portal.wifi_started = true;
+        ESP_RETURN_ON_ERROR(esp_wifi_set_max_tx_power(CONFIG_AUDIO_PORTAL_WIFI_MAX_TX_POWER_QDBM), TAG, "set wifi tx power failed");
+    }
+
+    portal_load_credentials();
+    ESP_RETURN_ON_ERROR(portal_set_ap_mode(s_portal.credentials_loaded), TAG, "set AP mode failed");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg), TAG, "set AP config failed");
     s_portal.portal_enabled = true;
     if (!s_portal.sta_connected) {
         s_portal.state = PORTAL_STATE_PROVISIONING;
     }
-    ESP_LOGI(TAG, "[OK] SoftAP enabled: ssid=%s url=http://192.168.4.1/", CONFIG_AUDIO_PORTAL_AP_SSID);
+    ESP_LOGI(TAG, "[OK] SoftAP enabled: ssid=%s mode=%s url=http://192.168.4.1/",
+        CONFIG_AUDIO_PORTAL_AP_SSID,
+        s_portal.credentials_loaded ? "APSTA" : "AP");
     return ESP_OK;
 }
 
@@ -789,7 +843,10 @@ esp_err_t portal_service_stop(void)
         ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "set STA mode failed");
         s_portal.state = PORTAL_STATE_CONNECTED;
     } else {
-        ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "disable AP failed");
+        if (s_portal.wifi_started) {
+            ESP_RETURN_ON_ERROR(esp_wifi_stop(), TAG, "wifi stop failed");
+            s_portal.wifi_started = false;
+        }
         s_portal.state = PORTAL_STATE_IDLE;
     }
 
