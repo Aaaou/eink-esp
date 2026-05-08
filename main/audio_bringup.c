@@ -26,7 +26,6 @@ static bool s_audio_ready;
 #define AUDIO_FRAME_BYTES 4
 #define AUDIO_INPUT_BLOCK_BYTES 1024
 #define AUDIO_I2S_MCLK_MULTIPLE I2S_MCLK_MULTIPLE_256
-#define AUDIO_I2S_BCLK_DIV 8
 
 #define ES8311_SYSTEM_REG0D 0x0D
 #define ES8311_SYSTEM_REG0E 0x0E
@@ -210,7 +209,6 @@ static esp_err_t audio_init_i2s(void)
         .clk_src = I2S_CLK_SRC_DEFAULT,
         .ext_clk_freq_hz = 0,
         .mclk_multiple = AUDIO_I2S_MCLK_MULTIPLE,
-        .bclk_div = AUDIO_I2S_BCLK_DIV,
     };
 
     const i2s_std_config_t std_cfg = {
@@ -431,15 +429,15 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
 
     ESP_LOGI(TAG, "[OK] Recorded WAV: %lu bytes payload to %s", (unsigned long)total_data_bytes, path);
     ESP_LOGI(TAG,
-        "[OK] PCM stats: samples=%u min=%d max=%d avg_abs=%u nonzero=%u/%u left_nonzero=%u right_nonzero=%u raw_nonzero_bytes=%u",
-        sample_count,
+        "[OK] PCM stats: samples=%lu min=%d max=%d avg_abs=%u nonzero=%lu/%lu left_nonzero=%lu right_nonzero=%lu raw_nonzero_bytes=%lu",
+        (unsigned long)sample_count,
         (sample_count > 0) ? pcm_min : 0,
         (sample_count > 0) ? pcm_max : 0,
         (sample_count > 0) ? (unsigned)(abs_sum / sample_count) : 0U,
-        nonzero_count,
-        sample_count,
-        left_nonzero_count,
-        right_nonzero_count,
-        raw_nonzero_bytes);
+        (unsigned long)nonzero_count,
+        (unsigned long)sample_count,
+        (unsigned long)left_nonzero_count,
+        (unsigned long)right_nonzero_count,
+        (unsigned long)raw_nonzero_bytes);
     return ESP_OK;
 }
