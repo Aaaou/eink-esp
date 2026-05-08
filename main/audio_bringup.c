@@ -111,7 +111,7 @@ static esp_err_t es8311_board_write_reg(uint8_t codec_addr, uint8_t reg, uint8_t
 static esp_err_t audio_apply_es8311_analog_mic_fixup(uint8_t codec_addr)
 {
 #if CONFIG_AUDIO_ES8311_ANALOG_MIC_FIXUP
-    ESP_LOGI(TAG, "[MIC] ES8311 analog Mic1P-Mic1N fixup: REG14=0x%02X REG16=0x%02X REG17=0x%02X",
+    ESP_LOGI(TAG, "[MIC] ES8311 analog Mic1P-Mic1N baseline fixup: REG14=0x%02X REG16=0x%02X REG17=0x%02X",
         ES8311_BOARD_ANALOG_MIC_REG14,
         ES8311_BOARD_ADC_GAIN_REG16,
         ES8311_BOARD_ADC_VOLUME_REG17);
@@ -121,6 +121,8 @@ static esp_err_t audio_apply_es8311_analog_mic_fixup(uint8_t codec_addr)
     ESP_RETURN_ON_ERROR(es8311_board_write_reg(codec_addr, ES8311_SYSTEM_REG14, ES8311_BOARD_ANALOG_MIC_REG14), TAG, "ES8311 REG14 failed");
     ESP_RETURN_ON_ERROR(es8311_board_write_reg(codec_addr, ES8311_ADC_REG16, ES8311_BOARD_ADC_GAIN_REG16), TAG, "ES8311 REG16 failed");
     ESP_RETURN_ON_ERROR(es8311_board_write_reg(codec_addr, ES8311_ADC_REG17, ES8311_BOARD_ADC_VOLUME_REG17), TAG, "ES8311 REG17 failed");
+    ESP_RETURN_ON_ERROR(es8311_board_write_reg(codec_addr, ES8311_ADC_REG15, 0x00), TAG, "ES8311 REG15 failed");
+    ESP_RETURN_ON_ERROR(es8311_board_write_reg(codec_addr, ES8311_ADC_REG1B, 0x0C), TAG, "ES8311 REG1B failed");
     ESP_RETURN_ON_ERROR(es8311_board_write_reg(codec_addr, ES8311_ADC_REG1C, 0x6A), TAG, "ES8311 REG1C failed");
 #else
     (void)codec_addr;
@@ -349,6 +351,8 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
     uint32_t left_nonzero_count = 0;
     uint32_t right_nonzero_count = 0;
     uint32_t raw_nonzero_bytes = 0;
+    uint32_t clip_min_count = 0;
+    uint32_t clip_max_count = 0;
     bool raw_diag_logged = false;
 
     while (total_data_bytes < output_bytes_target) {
@@ -401,6 +405,12 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
             if (sample != 0) {
                 ++nonzero_count;
             }
+            if (sample == INT16_MIN) {
+                ++clip_min_count;
+            }
+            if (sample == INT16_MAX) {
+                ++clip_max_count;
+            }
             abs_sum += (uint64_t)((sample < 0) ? -(int32_t)sample : sample);
             ++sample_count;
         }
@@ -429,7 +439,7 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
 
     ESP_LOGI(TAG, "[OK] Recorded WAV: %lu bytes payload to %s", (unsigned long)total_data_bytes, path);
     ESP_LOGI(TAG,
-        "[OK] PCM stats: samples=%lu min=%d max=%d avg_abs=%u nonzero=%lu/%lu left_nonzero=%lu right_nonzero=%lu raw_nonzero_bytes=%lu",
+        "[OK] PCM stats: samples=%lu min=%d max=%d avg_abs=%u nonzero=%lu/%lu left_nonzero=%lu right_nonzero=%lu clip_min=%lu clip_max=%lu raw_nonzero_bytes=%lu",
         (unsigned long)sample_count,
         (sample_count > 0) ? pcm_min : 0,
         (sample_count > 0) ? pcm_max : 0,
@@ -438,6 +448,8 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
         (unsigned long)sample_count,
         (unsigned long)left_nonzero_count,
         (unsigned long)right_nonzero_count,
+        (unsigned long)clip_min_count,
+        (unsigned long)clip_max_count,
         (unsigned long)raw_nonzero_bytes);
     return ESP_OK;
 }
