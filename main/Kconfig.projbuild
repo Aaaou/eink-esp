@@ -98,6 +98,23 @@ config AUDIO_RECORD_SAMPLE_RATE
     help
         Sample rate used for I2S capture and WAV export.
 
+config AUDIO_ES8311_ADC_GAIN_REG16
+    int "ES8311 ADC gain register 0x16"
+    range 0 7
+    default 2
+    help
+        ES8311 ADC/PGA gain written to register 0x16. The es8311 component
+        enum maps 0..7 to 0, 6, 12, 18, 24, 30, 36, 42 dB. Use lower values
+        while the recording clips at -32768 or 32767.
+
+config AUDIO_ES8311_ADC_VOLUME_REG17
+    int "ES8311 ADC digital volume register 0x17"
+    range 0 255
+    default 160
+    help
+        ES8311 ADC digital volume written to register 0x17. The previous
+        bring-up value was 200 (0xC8), which can clip loud analog input.
+
 config AUDIO_BOOT_TEST_TONE
     bool "Play speaker test tone on boot"
     default y

@@ -41,8 +41,8 @@ static bool s_audio_ready;
 #define ES8311_ADC_REG1C 0x1C
 
 #define ES8311_BOARD_ANALOG_MIC_REG14 0x1A
-#define ES8311_BOARD_ADC_GAIN_REG16 ((uint8_t)ES8311_MIC_GAIN_30DB)
-#define ES8311_BOARD_ADC_VOLUME_REG17 0xC8
+#define ES8311_BOARD_ADC_GAIN_REG16 ((uint8_t)CONFIG_AUDIO_ES8311_ADC_GAIN_REG16)
+#define ES8311_BOARD_ADC_VOLUME_REG17 ((uint8_t)CONFIG_AUDIO_ES8311_ADC_VOLUME_REG17)
 
 typedef struct {
     int16_t pcm_min;
@@ -132,9 +132,10 @@ static esp_err_t es8311_board_write_reg(uint8_t codec_addr, uint8_t reg, uint8_t
 static esp_err_t audio_apply_es8311_analog_mic_fixup(uint8_t codec_addr)
 {
 #if CONFIG_AUDIO_ES8311_ANALOG_MIC_FIXUP
-    ESP_LOGI(TAG, "[MIC] ES8311 analog Mic1P-Mic1N baseline fixup: REG14=0x%02X REG16=0x%02X REG17=0x%02X",
+    ESP_LOGI(TAG, "[MIC] ES8311 analog Mic1P-Mic1N baseline fixup: REG14=0x%02X REG16=0x%02X (~%udB) REG17=0x%02X",
         ES8311_BOARD_ANALOG_MIC_REG14,
         ES8311_BOARD_ADC_GAIN_REG16,
+        (unsigned)(ES8311_BOARD_ADC_GAIN_REG16 * 6U),
         ES8311_BOARD_ADC_VOLUME_REG17);
 
     ESP_RETURN_ON_ERROR(es8311_board_write_reg(codec_addr, ES8311_SYSTEM_REG0D, 0x01), TAG, "ES8311 REG0D failed");
