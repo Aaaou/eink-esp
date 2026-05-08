@@ -324,6 +324,18 @@ bool audio_capture_is_ready(void)
     return s_audio_ready && (s_i2s_rx != NULL);
 }
 
+static bool wav_header_is_usable(const wav_header_t *header)
+{
+    return (memcmp(header->riff, "RIFF", 4) == 0) &&
+           (memcmp(header->wave, "WAVE", 4) == 0) &&
+           (memcmp(header->fmt_, "fmt ", 4) == 0) &&
+           (memcmp(header->data, "data", 4) == 0) &&
+           (header->audio_format == 1) &&
+           (header->num_channels == AUDIO_CHANNELS) &&
+           (header->sample_rate == AUDIO_SAMPLE_RATE_HZ) &&
+           (header->bits_per_sample == AUDIO_BITS_PER_SAMPLE);
+}
+
 esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size_t *bytes_written)
 {
     ESP_RETURN_ON_FALSE(audio_capture_is_ready(), ESP_ERR_INVALID_STATE, TAG, "audio capture not ready");
@@ -515,5 +527,84 @@ esp_err_t audio_capture_wav_to_file(const char *path, uint32_t duration_ms, size
         (unsigned long)clip_min_count,
         (unsigned long)clip_max_count,
         (unsigned long)raw_nonzero_bytes);
+    return ESP_OK;
+}
+
+esp_err_t audio_play_wav_file(const char *path)
+{
+    ESP_RETURN_ON_FALSE(s_audio_ready && (s_i2s_tx != NULL), ESP_ERR_INVALID_STATE, TAG, "audio playback not ready");
+    ESP_RETURN_ON_FALSE(path != NULL, ESP_ERR_INVALID_ARG, TAG, "path is null");
+
+    FILE *file = fopen(path, "rb");
+    ESP_RETURN_ON_FALSE(file != NULL, ESP_ERR_NOT_FOUND, TAG, "failed to open wav for playback");
+
+    wav_header_t header;
+    if (fread(&header, 1, sizeof(header), file) != sizeof(header)) {
+        fclose(file);
+        return ESP_FAIL;
+    }
+    if (!wav_header_is_usable(&header)) {
+        fclose(file);
+        ESP_LOGE(TAG, "[PLAY] Unsupported WAV header: %s", path);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_codec != NULL) {
+        int volume_set = 0;
+        ESP_RETURN_ON_ERROR(es8311_voice_mute(s_codec, false), TAG, "ES8311 unmute failed");
+        ESP_RETURN_ON_ERROR(es8311_voice_volume_set(s_codec, 85, &volume_set), TAG, "ES8311 volume failed");
+        ESP_LOGI(TAG, "[PLAY] ES8311 output volume=%d", volume_set);
+    }
+
+    uint8_t *mono_buffer = malloc(AUDIO_INPUT_BLOCK_BYTES / 2);
+    uint8_t *stereo_buffer = malloc(AUDIO_INPUT_BLOCK_BYTES);
+    if ((mono_buffer == NULL) || (stereo_buffer == NULL)) {
+        free(mono_buffer);
+        free(stereo_buffer);
+        fclose(file);
+        return ESP_ERR_NO_MEM;
+    }
+    uint32_t remaining = header.data_size;
+    uint32_t played_bytes = 0;
+    const uint32_t start_ms = esp_log_timestamp();
+
+    ESP_LOGI(TAG, "[PLAY] start path=%s payload=%lu", path, (unsigned long)header.data_size);
+    while (remaining > 0) {
+        const size_t want = (remaining > sizeof(mono_buffer)) ? sizeof(mono_buffer) : (size_t)remaining;
+        const size_t got = fread(mono_buffer, 1, want, file);
+        if (got == 0) {
+            free(mono_buffer);
+            free(stereo_buffer);
+            fclose(file);
+            return ESP_FAIL;
+        }
+
+        size_t stereo_bytes = 0;
+        for (size_t i = 0; (i + 1) < got; i += 2) {
+            const uint8_t lo = mono_buffer[i];
+            const uint8_t hi = mono_buffer[i + 1];
+            stereo_buffer[stereo_bytes++] = lo;
+            stereo_buffer[stereo_bytes++] = hi;
+            stereo_buffer[stereo_bytes++] = lo;
+            stereo_buffer[stereo_bytes++] = hi;
+        }
+
+        size_t bytes_written = 0;
+        ESP_RETURN_ON_ERROR(
+            i2s_channel_write(s_i2s_tx, stereo_buffer, stereo_bytes, &bytes_written, pdMS_TO_TICKS(1000)),
+            TAG,
+            "i2s playback write failed");
+        if (bytes_written != stereo_bytes) {
+            ESP_LOGW(TAG, "[PLAY] short write: %u/%u", (unsigned)bytes_written, (unsigned)stereo_bytes);
+        }
+
+        played_bytes += (uint32_t)got;
+        remaining -= (uint32_t)got;
+    }
+
+    fclose(file);
+    free(mono_buffer);
+    free(stereo_buffer);
+    ESP_LOGI(TAG, "[PLAY] done elapsed=%lu ms payload=%lu", (unsigned long)(esp_log_timestamp() - start_ms), (unsigned long)played_bytes);
     return ESP_OK;
 }

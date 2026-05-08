@@ -17,7 +17,6 @@
 #include <sys/stat.h>
 
 static const char *TAG = "recording_service";
-#define RECORDING_SLOT_COUNT 3
 #define RECORDING_EXPECTED_FILE_SIZE \
     ((size_t)44U + ((size_t)CONFIG_AUDIO_RECORD_SAMPLE_RATE * 2U * (size_t)CONFIG_AUDIO_RECORD_DURATION_MS / 1000U))
 
@@ -27,11 +26,9 @@ static atomic_bool s_recording;
 static atomic_bool s_portal_busy;
 static atomic_bool s_has_recording;
 static atomic_size_t s_file_size;
-static atomic_uint s_next_record_id;
-static atomic_uint s_completed_record_id;
-static atomic_uint s_active_record_id;
-static char s_record_path[40] = "";
-static char s_download_name[32] = "record_000000.wav";
+static atomic_uint s_record_id;
+static const char *s_record_path = "/spiffs/record.wav";
+static const char *s_download_name = "record.wav";
 
 static void recording_copy_str(char *dst, const char *src, size_t dst_size)
 {
@@ -54,14 +51,6 @@ static size_t recording_file_size(const char *path)
     return (size_t)st.st_size;
 }
 
-static void recording_prepare_paths(uint32_t record_id, char *slot_path, size_t slot_path_size, char *download_name, size_t download_name_size)
-{
-    const uint32_t slot = ((record_id - 1U) % RECORDING_SLOT_COUNT) + 1U;
-
-    snprintf(slot_path, slot_path_size, "/spiffs/record_slot_%lu.wav", (unsigned long)slot);
-    snprintf(download_name, download_name_size, "record_%06lu.wav", (unsigned long)record_id);
-}
-
 static void record_task(void *arg)
 {
     (void)arg;
@@ -72,53 +61,51 @@ static void record_task(void *arg)
         }
 
         atomic_store(&s_recording, true);
-        const uint32_t record_id = atomic_fetch_add(&s_next_record_id, 1U) + 1U;
-        char slot_path[40];
-        char download_name[32];
-        recording_prepare_paths(record_id, slot_path, sizeof(slot_path), download_name, sizeof(download_name));
-        atomic_store(&s_active_record_id, record_id);
+        const uint32_t record_id = atomic_fetch_add(&s_record_id, 1U) + 1U;
 
-        remove(slot_path);
+        remove(s_record_path);
 
         size_t bytes_written = 0;
         const int64_t start_ms = esp_log_timestamp();
         ESP_LOGI(TAG,
-            "[REC %06lu] start duration=%u ms sample_rate=%u expected_size=%u path=%s",
+            "[LOOP %06lu] record start duration=%u ms sample_rate=%u expected_size=%u path=%s",
             (unsigned long)record_id,
             CONFIG_AUDIO_RECORD_DURATION_MS,
             CONFIG_AUDIO_RECORD_SAMPLE_RATE,
             (unsigned)RECORDING_EXPECTED_FILE_SIZE,
-            slot_path);
+            s_record_path);
 
-        esp_err_t err = audio_capture_wav_to_file(slot_path, CONFIG_AUDIO_RECORD_DURATION_MS, &bytes_written);
+        esp_err_t err = audio_capture_wav_to_file(s_record_path, CONFIG_AUDIO_RECORD_DURATION_MS, &bytes_written);
         if (err == ESP_OK) {
-            const size_t actual_size = recording_file_size(slot_path);
+            const size_t actual_size = recording_file_size(s_record_path);
             const int64_t elapsed_ms = (int64_t)esp_log_timestamp() - start_ms;
             atomic_store(&s_has_recording, true);
             atomic_store(&s_file_size, actual_size);
-            atomic_store(&s_completed_record_id, record_id);
             ESP_LOGI(TAG,
-                "[REC %06lu] done elapsed=%lld ms bytes_written=%u actual_size=%u expected_size=%u download=%s",
+                "[LOOP %06lu] record done elapsed=%lld ms bytes_written=%u actual_size=%u expected_size=%u",
                 (unsigned long)record_id,
                 (long long)elapsed_ms,
                 (unsigned)bytes_written,
                 (unsigned)actual_size,
-                (unsigned)RECORDING_EXPECTED_FILE_SIZE,
-                download_name);
+                (unsigned)RECORDING_EXPECTED_FILE_SIZE);
             if ((actual_size != bytes_written) || (actual_size != RECORDING_EXPECTED_FILE_SIZE)) {
                 ESP_LOGW(TAG,
-                    "[REC %06lu] size mismatch: bytes_written=%u actual=%u expected=%u",
+                    "[LOOP %06lu] size mismatch: bytes_written=%u actual=%u expected=%u",
                     (unsigned long)record_id,
                     (unsigned)bytes_written,
                     (unsigned)actual_size,
                     (unsigned)RECORDING_EXPECTED_FILE_SIZE);
             }
-            recording_copy_str(s_record_path, slot_path, sizeof(s_record_path));
-            recording_copy_str(s_download_name, download_name, sizeof(s_download_name));
+            ESP_LOGI(TAG, "[LOOP %06lu] playback start", (unsigned long)record_id);
+            err = audio_play_wav_file(s_record_path);
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "[LOOP %06lu] playback done", (unsigned long)record_id);
+            } else {
+                ESP_LOGE(TAG, "[LOOP %06lu] playback failed: %s", (unsigned long)record_id, esp_err_to_name(err));
+            }
         } else {
-            ESP_LOGE(TAG, "[REC %06lu] failed: %s", (unsigned long)record_id, esp_err_to_name(err));
+            ESP_LOGE(TAG, "[LOOP %06lu] record failed: %s", (unsigned long)record_id, esp_err_to_name(err));
         }
-        atomic_store(&s_active_record_id, 0U);
         atomic_store(&s_recording, false);
     }
 }
@@ -230,8 +217,8 @@ void recording_service_get_status(recording_status_t *status)
     status->has_recording = atomic_load(&s_has_recording);
     status->file_size = atomic_load(&s_file_size);
     status->expected_file_size = RECORDING_EXPECTED_FILE_SIZE;
-    status->record_id = atomic_load(&s_completed_record_id);
-    status->active_record_id = atomic_load(&s_active_record_id);
+    status->record_id = atomic_load(&s_record_id);
+    status->active_record_id = status->recording ? status->record_id : 0;
     status->duration_ms = CONFIG_AUDIO_RECORD_DURATION_MS;
     status->sample_rate_hz = CONFIG_AUDIO_RECORD_SAMPLE_RATE;
     recording_copy_str(status->path, s_record_path, sizeof(status->path));
