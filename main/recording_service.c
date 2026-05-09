@@ -110,6 +110,10 @@ static void recording_refresh_file_status(void)
 {
     size_t file_size = 0;
 
+    if (atomic_load(&s_recording) || atomic_load(&s_record_request_pending) || atomic_load(&s_play_request_pending)) {
+        return;
+    }
+
     if (recording_wav_file_is_valid(s_record_path, &file_size)) {
         atomic_store(&s_has_recording, true);
         atomic_store(&s_file_size, file_size);
@@ -353,6 +357,23 @@ esp_err_t recording_service_play_file(const char *path)
     }
     recording_copy_str(s_play_path, path, sizeof(s_play_path));
     xTaskNotifyGive(s_play_task);
+    return ESP_OK;
+}
+
+esp_err_t recording_service_delete_recording(void)
+{
+    if (atomic_load(&s_recording) || atomic_load(&s_record_request_pending) || atomic_load(&s_play_request_pending)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (remove(s_record_path) != 0) {
+        recording_refresh_file_status();
+        return atomic_load(&s_has_recording) ? ESP_FAIL : ESP_ERR_NOT_FOUND;
+    }
+
+    atomic_store(&s_has_recording, false);
+    atomic_store(&s_file_size, 0);
+    ESP_LOGI(TAG, "[REC] Deleted recording file: %s", s_record_path);
     return ESP_OK;
 }
 
