@@ -11,7 +11,7 @@ esp_err_t storage_service_init(void)
     esp_vfs_spiffs_conf_t conf = {
         .base_path = "/spiffs",
         .partition_label = "storage",
-        .max_files = 4,
+        .max_files = 6,
         .format_if_mount_failed = true,
     };
 

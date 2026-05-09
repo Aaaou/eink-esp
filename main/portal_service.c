@@ -47,13 +47,11 @@ typedef struct {
     httpd_handle_t server;
     esp_netif_t *ap_netif;
     esp_netif_t *sta_netif;
-    TaskHandle_t autoconnect_task;
     portal_state_t state;
     bool wifi_initialized;
     bool wifi_started;
     bool portal_enabled;
     bool sta_connected;
-    bool autoconnect_requested;
     bool credentials_loaded;
     bool sntp_started;
     bool calendar_task_started;
@@ -73,18 +71,18 @@ static const char s_index_html[] =
 "*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:14px;font-family:Arial,'Microsoft YaHei',sans-serif;color:var(--ink);background:linear-gradient(145deg,#08121f,#14324d)}.shell{max-width:1040px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:14px}.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}.row,.toolbar{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}h1{margin:10px 0;font-size:28px}h2{margin:0 0 10px;font-size:20px}.hint,.msg,.meta{color:var(--muted);font-size:13px;line-height:1.5}.badge{display:inline-block;border-radius:999px;padding:6px 10px;background:rgba(255,255,255,.08);color:var(--accent2);font-size:12px}.card{border:1px solid var(--line);border-radius:10px;padding:10px;background:rgba(255,255,255,.05)}.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}.value{font-size:18px;font-weight:700;margin-top:4px}.lab{font-size:12px;color:var(--muted)}"
 "button,input,select{font:inherit}button{border:0;border-radius:10px;padding:10px 12px;font-weight:700;cursor:pointer}.primary{color:#04111d;background:linear-gradient(135deg,var(--accent),var(--accent2))}.secondary{color:var(--ink);background:rgba(255,255,255,.09);border:1px solid var(--line)}.danger{color:#fff;background:linear-gradient(135deg,#ff7e79,#ff5d8f)}button:disabled{opacity:.55;cursor:wait}input,select{width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.06);color:var(--ink)}select option{color:#111}.stack{display:grid;gap:8px}.list{display:grid;gap:8px;max-height:220px;overflow:auto}.item{width:100%;text-align:left;border:1px solid transparent;border-radius:10px;padding:10px;background:rgba(255,255,255,.06);color:var(--ink)}.item.active{border-color:var(--accent);background:rgba(89,209,255,.14)}.preview{display:grid;grid-template-columns:1fr 1fr;gap:8px}.preview canvas{width:100%;display:block;background:#fff;border-radius:8px;image-rendering:pixelated}.tools{display:grid;gap:8px}.file-name{font-size:13px;color:var(--muted);word-break:break-all}.msg.success{color:var(--accent2)}.msg.error{color:var(--danger)}.section{margin-top:14px;padding-top:14px;border-top:1px dashed var(--line)}@media(max-width:860px){.shell,.stats,.preview{grid-template-columns:1fr}}"
 "</style></head><body><div class='shell'><section class='panel'><div class='toolbar'><span class='badge'>Ink ESP | 2.13</span><button class='secondary' id='scanBtn' type='button'>&#8635; &#25195;&#25551;</button></div><h1>&#37197;&#32593;</h1><div class='stats'><div class='card'><div class='lab'>&#29366;&#24577;</div><div class='value' id='stateVal'>idle</div></div><div class='card'><div class='lab'>&#22320;&#22336;</div><div class='value' id='ipVal'>192.168.4.1</div></div></div><div class='stack'><div class='list' id='wifiList'><div class='item'>&#25195;&#25551;&#20013;...</div></div><input id='ssidInput' placeholder='WiFi &#21517;&#31216;'><input id='passwordInput' type='password' placeholder='&#23494;&#30721;'><button class='primary' id='connectBtn' type='button'>&#10003; &#20445;&#23384;&#24182;&#36830;&#25509;</button><div class='msg' id='wifiMsg'></div></div>"
-"<div class='section'><h2>&#24405;&#38899;</h2><div class='row'><button class='primary' id='recordBtn' type='button'>&#9679; &#24405;&#38899;</button><a id='downloadLink' href='/api/record.wav' download><button class='secondary' type='button'>&#8595; &#19979;&#36733;</button></a></div><audio id='player' controls preload='none' style='width:100%;margin-top:10px'></audio><div class='msg' id='audioMsg'></div></div></section>"
+"<div class='section'><h2>&#24405;&#38899;</h2><div class='row'><button class='secondary' id='recordsBtn' type='button'>&#8635; &#21047;&#26032;&#24405;&#38899;</button><button class='danger' id='deleteRecordBtn' type='button'>&#10005; &#21024;&#38500;</button><a id='downloadLink' href='/api/record.wav' download><button class='secondary' type='button'>&#8595; &#19979;&#36733;</button></a></div><audio id='player' controls preload='none' style='width:100%;margin-top:10px'></audio><div class='list' id='recordList' style='margin-top:10px'></div><div class='msg' id='audioMsg'></div></div></section>"
 "<section class='panel'><h2>&#21047;&#22270;</h2><div class='tools'><input id='imageFile' type='file' accept='image/*,.bmp'><div class='row'><button class='secondary' id='pickBtn' type='button'>&#9635; &#36873;&#22270;</button><span class='file-name' id='fileName'>&#26410;&#36873;&#25321;</span></div><label class='hint'>&#32553;&#25918;<input id='zoomRange' type='range' min='20' max='320' value='100'></label><select id='algoSelect'><option value='clean'>&#20928;&#30333;</option><option value='bayer'>&#22270;&#26631;</option><option value='fs'>&#29031;&#29255;</option><option value='fs_vivid'>&#21160;&#28459;&#22686;&#24378;</option><option value='fs_clean'>&#21160;&#28459;&#20928;&#30333;</option><option value='atkinson'>&#26580;&#21644;</option><option value='edge'>&#32447;&#26465;</option></select><select id='refreshSelect'><option value='tri'>&#19977;&#33394;&#20840;&#21047;</option><option value='bw'>&#40657;&#30333;&#24555;&#21047;</option></select><button class='secondary' id='previewBtn' type='button'>&#9680; &#39044;&#35272;</button><button class='primary' id='uploadBtn' type='button'>&#8593; &#21047;&#23631;</button><div class='msg' id='imageMsg'></div><div class='preview'><div><div class='lab'>&#35009;&#21098;</div><canvas id='cropCanvas' width='104' height='212'></canvas></div><div><div class='lab'>&#39044;&#35272;</div><canvas id='previewCanvas' width='104' height='212'></canvas></div></div></div>"
 "<div class='section'><h2>&#26085;&#21382;</h2><button class='danger' id='calendarBtn' type='button'>&#9633; &#19977;&#26085;&#21382;</button><div class='msg' id='calendarMsg'></div></div><div class='section'><h2>&#22791;&#24536;&#24405;</h2><div class='stack'><div class='row'><input id='memo1' maxlength='31' placeholder='&#20107;&#39033; 1'><label class='hint'><input id='done1' type='checkbox' style='width:auto'> &#10003;</label></div><div class='row'><input id='memo2' maxlength='31' placeholder='&#20107;&#39033; 2'><label class='hint'><input id='done2' type='checkbox' style='width:auto'> &#10003;</label></div><div class='row'><input id='memo3' maxlength='31' placeholder='&#20107;&#39033; 3'><label class='hint'><input id='done3' type='checkbox' style='width:auto'> &#10003;</label></div><button class='primary' id='memoBtn' type='button'>&#9745; &#26174;&#31034;</button><div class='msg' id='memoMsg'></div></div></div></section></div>"
 "<script>"
 "var W=104,H=212,LEN=W*H/8,ORIGIN='http://192.168.4.1';function E(id){return document.getElementById(id)}function addEv(n,e,f){if(!n)return;if(n.addEventListener)n.addEventListener(e,f,false);else if(n.attachEvent)n.attachEvent('on'+e,f);else n['on'+e]=f}function msg(n,t,k){if(!n)return;n.innerHTML='';n.appendChild(document.createTextNode(t||''));n.className='msg'+(k?' '+k:'')}function req(m,u,b,type,ok,fail){var x=new XMLHttpRequest();x.open(m,ORIGIN+u,true);x.timeout=60000;if(type)x.setRequestHeader('Content-Type',type);x.onreadystatechange=function(){if(x.readyState!==4)return;var d={};try{d=x.responseText?JSON.parse(x.responseText):{}}catch(e){d={message:x.responseText||''}}if(x.status>=200&&x.status<300){if(ok)ok(d)}else{if(fail)fail(d.message||('HTTP '+x.status))}};x.onerror=function(){if(fail)fail('fail')};x.ontimeout=function(){if(fail)fail('timeout')};x.send(b||null)}"
-"var wifiList=E('wifiList'),ssidInput=E('ssidInput'),passwordInput=E('passwordInput'),wifiMsg=E('wifiMsg'),stateVal=E('stateVal'),ipVal=E('ipVal'),imageFile=E('imageFile'),fileName=E('fileName'),imageMsg=E('imageMsg'),audioMsg=E('audioMsg'),calendarMsg=E('calendarMsg'),memoMsg=E('memoMsg'),cropCanvas=E('cropCanvas'),previewCanvas=E('previewCanvas'),cropCtx=cropCanvas.getContext('2d'),previewCtx=previewCanvas.getContext('2d'),img=null,frame=null,crop={x:0,y:0,drag:false,lx:0,ly:0};"
-"function status(){req('GET','/api/status',null,null,function(s){stateVal.innerHTML=s.state||'-';ipVal.innerHTML=s.ip||'192.168.4.1';if(s.recording){msg(audioMsg,'REC active #'+(s.active_record_id||0)+', downloadable #'+(s.record_id||0),'success')}else if(s.has_recording){var u='/api/record.wav?id='+(s.record_id||0)+'&t='+new Date().getTime();E('player').src=u;var dl=E('downloadLink');if(dl){dl.href=u;if(s.download_name)dl.setAttribute('download',s.download_name)}msg(audioMsg,'REC #'+(s.record_id||0)+' '+(s.file_size||0)+'/'+(s.expected_file_size||0)+'B','success')}})}function scan(){msg(wifiMsg,'scan...');req('GET','/api/scan',null,null,function(d){var a=d.networks||[];wifiList.innerHTML='';for(var i=0;i<a.length;i++){(function(n){var b=document.createElement('button');b.type='button';b.className='item';b.appendChild(document.createTextNode(n.ssid+'  '+n.rssi+' dBm  '+n.auth));b.onclick=function(){ssidInput.value=n.ssid;var cs=wifiList.getElementsByTagName('button');for(var j=0;j<cs.length;j++)cs[j].className='item';b.className='item active'};wifiList.appendChild(b)})(a[i])}msg(wifiMsg,'ok','success')},function(e){msg(wifiMsg,e,'error')})}function connectWifi(){msg(wifiMsg,'connect...');req('POST','/api/connect',JSON.stringify({ssid:ssidInput.value,password:passwordInput.value}),'application/json',function(d){msg(wifiMsg,d.message||'ok','success');setTimeout(status,2000)},function(e){msg(wifiMsg,e,'error')})}"
+"var wifiList=E('wifiList'),ssidInput=E('ssidInput'),passwordInput=E('passwordInput'),wifiMsg=E('wifiMsg'),stateVal=E('stateVal'),ipVal=E('ipVal'),imageFile=E('imageFile'),fileName=E('fileName'),imageMsg=E('imageMsg'),audioMsg=E('audioMsg'),recordList=E('recordList'),player=E('player'),downloadLink=E('downloadLink'),calendarMsg=E('calendarMsg'),memoMsg=E('memoMsg'),cropCanvas=E('cropCanvas'),previewCanvas=E('previewCanvas'),cropCtx=cropCanvas.getContext('2d'),previewCtx=previewCanvas.getContext('2d'),img=null,frame=null,crop={x:0,y:0,drag:false,lx:0,ly:0};"
+"function recordUrl(n){return '/api/record.wav?name='+encodeURIComponent(n)+'&t='+new Date().getTime()}function setBrowserRecord(n){var u=recordUrl(n);if(player)player.src=ORIGIN+u;if(downloadLink){downloadLink.href=ORIGIN+u;downloadLink.setAttribute('download',n)}}function clearBrowserRecord(){if(player){player.pause();player.removeAttribute('src');player.load()}if(downloadLink){downloadLink.href='/api/record.wav';downloadLink.setAttribute('download','record.wav')}}function status(){req('GET','/api/status',null,null,function(s){stateVal.innerHTML=s.state||'-';ipVal.innerHTML=s.ip||'192.168.4.1';if(s.recording){msg(audioMsg,'audio busy #'+(s.active_record_id||0),'success')}else if(s.has_recording){setBrowserRecord(s.download_name||'record.wav');msg(audioMsg,'REC #'+(s.record_id||0)+' '+(s.file_size||0)+'/'+(s.expected_file_size||0)+'B','success')}})}function playRecord(n){msg(audioMsg,'ES8311 playing '+n);req('POST','/api/record/play',JSON.stringify({name:n}),'application/json',function(d){msg(audioMsg,d.message||'playing on ES8311','success');setTimeout(status,800)},function(e){msg(audioMsg,e,'error')})}function browserPlay(n){setBrowserRecord(n);if(player&&player.play)player.play();msg(audioMsg,'browser playing '+n,'success')}function deleteRecord(){msg(audioMsg,'delete...');req('POST','/api/record/delete',null,null,function(d){clearBrowserRecord();msg(audioMsg,d.message||'deleted','success');loadRecords();status()},function(e){msg(audioMsg,e,'error')})}function loadRecords(){req('GET','/api/records',null,null,function(d){var a=d.records||[];recordList.innerHTML='';for(var i=0;i<a.length;i++){(function(r){var row=document.createElement('div');row.className='row item';var dev=document.createElement('button');dev.type='button';dev.className='secondary';dev.appendChild(document.createTextNode('ES8311 play'));dev.onclick=function(){playRecord(r.name)};var br=document.createElement('button');br.type='button';br.className='secondary';br.appendChild(document.createTextNode('Browser play'));br.onclick=function(){browserPlay(r.name)};var info=document.createElement('span');info.className='meta';info.appendChild(document.createTextNode(r.name+'  '+r.size+'B'));row.appendChild(info);row.appendChild(dev);row.appendChild(br);recordList.appendChild(row);if(i===0)setBrowserRecord(r.name)})(a[i])}if(!a.length){clearBrowserRecord();recordList.innerHTML='<div class=\"item\">no recordings</div>'}},function(e){msg(audioMsg,e,'error')})}function scan(){msg(wifiMsg,'scan...');req('GET','/api/scan',null,null,function(d){var a=d.networks||[];wifiList.innerHTML='';for(var i=0;i<a.length;i++){(function(n){var b=document.createElement('button');b.type='button';b.className='item';b.appendChild(document.createTextNode(n.ssid+'  '+n.rssi+' dBm  '+n.auth));b.onclick=function(){ssidInput.value=n.ssid;var cs=wifiList.getElementsByTagName('button');for(var j=0;j<cs.length;j++)cs[j].className='item';b.className='item active'};wifiList.appendChild(b)})(a[i])}msg(wifiMsg,'ok','success')},function(e){msg(wifiMsg,e,'error')})}function connectWifi(){msg(wifiMsg,'connect...');req('POST','/api/connect',JSON.stringify({ssid:ssidInput.value,password:passwordInput.value}),'application/json',function(d){msg(wifiMsg,d.message||'ok','success');setTimeout(status,2000)},function(e){msg(wifiMsg,e,'error')})}"
 "function clamp(v){return v<0?0:(v>255?255:v)}function luminance(r,g,b){return(r*30+g*59+b*11)/100}function orderedThreshold(x,y){var m=[0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5];return(m[(y&3)*4+(x&3)]-7.5)*10}function classifyPixel(r,g,b,x,y,algo,fast){var l=luminance(r,g,b),rs=r-Math.max(g,b),sat=Math.max(r,g,b)-Math.min(r,g,b);if(!fast&&r>=130&&rs>32&&sat>45&&l<235)return 2;if(algo==='bayer')return l+orderedThreshold(x,y)<138?1:0;if(algo==='edge')return l<150?1:0;return l<118?1:0}function nearestPalette(r,g,b,fast,algo){var l=luminance(r,g,b),rs=r-Math.max(g,b),sat=Math.max(r,g,b)-Math.min(r,g,b),rg=120,rb=28,bg=145;if(algo==='fs_vivid'){rg=132;rb=38;bg=152;r=clamp((r-128)*1.08+128);g=clamp((g-128)*1.03+128);b=clamp((b-128)*1.03+128);l=luminance(r,g,b);rs=r-Math.max(g,b);sat=Math.max(r,g,b)-Math.min(r,g,b)}if(algo==='fs_clean'){rg=136;rb=42;bg=138;if(l>182&&sat<52)return[255,255,255,0]}if(!fast&&r>=rg&&rs>rb&&sat>36&&l<238)return[255,0,0,2];return l<bg?[0,0,0,1]:[255,255,255,0]}function diffuse(d,w,h,x,y,er,eg,eb,wt,div){if(x<0||x>=w||y<0||y>=h)return;var i=(y*w+x)*4;d[i]=clamp(d[i]+er*wt/div);d[i+1]=clamp(d[i+1]+eg*wt/div);d[i+2]=clamp(d[i+2]+eb*wt/div)}function errorDiffuse(d,w,h,algo,fast){for(var y=0;y<h;y++){for(var x=0;x<w;x++){var i=(y*w+x)*4,or=d[i],og=d[i+1],ob=d[i+2],q=nearestPalette(or,og,ob,fast,algo);d[i]=q[0];d[i+1]=q[1];d[i+2]=q[2];d[i+3]=255;var er=or-q[0],eg=og-q[1],eb=ob-q[2];if(algo==='atkinson'){diffuse(d,w,h,x+1,y,er,eg,eb,1,8);diffuse(d,w,h,x+2,y,er,eg,eb,1,8);diffuse(d,w,h,x-1,y+1,er,eg,eb,1,8);diffuse(d,w,h,x,y+1,er,eg,eb,1,8);diffuse(d,w,h,x+1,y+1,er,eg,eb,1,8);diffuse(d,w,h,x,y+2,er,eg,eb,1,8)}else{diffuse(d,w,h,x+1,y,er,eg,eb,7,16);diffuse(d,w,h,x-1,y+1,er,eg,eb,3,16);diffuse(d,w,h,x,y+1,er,eg,eb,5,16);diffuse(d,w,h,x+1,y+1,er,eg,eb,1,16)}}}}"
 "function setPix(buf,x,y,on){var i=((y*W+x)>>3),m=0x80>>(x&7);buf[i]=on?(buf[i]&~m):(buf[i]|m)}function getPix(buf,x,y){return(buf[((y*W+x)>>3)]&(0x80>>(x&7)))?0:1}function isEdge(g,x,y){if(x<1||y<1||x>=W-1||y>=H-1)return 0;var i=y*W+x,gx=-g[i-W-1]-2*g[i-1]-g[i+W-1]+g[i-W+1]+2*g[i+1]+g[i+W+1],gy=-g[i-W-1]-2*g[i-W]-g[i-W+1]+g[i+W-1]+2*g[i+W]+g[i+W+1];return(Math.abs(gx)+Math.abs(gy))>86?1:0}function denoisePlanes(bw,red){var sb=new Uint8Array(bw),sr=new Uint8Array(red);function gp(buf,x,y){return(buf[((y*W+x)>>3)]&(0x80>>(x&7)))?0:1}for(var y=1;y<H-1;y++){for(var x=1;x<W-1;x++){var bi=gp(sb,x,y),ri=gp(sr,x,y);if(!bi&&!ri)continue;var nb=0,nr=0;for(var dy=-1;dy<=1;dy++){for(var dx=-1;dx<=1;dx++){if(dx||dy){nb+=gp(sb,x+dx,y+dy);nr+=gp(sr,x+dx,y+dy)}}}if(bi&&nb<2)setPix(bw,x,y,0);if(ri&&nr<2)setPix(red,x,y,0)}}}function drawCrop(){cropCtx.fillStyle='#fff';cropCtx.fillRect(0,0,W,H);if(!img)return;var sc=Math.max(W/img.width,H/img.height)*(parseInt(E('zoomRange').value,10)/100),dw=img.width*sc,dh=img.height*sc;if(dw<W)crop.x=(W-dw)/2;else crop.x=Math.min(0,Math.max(W-dw,crop.x));if(dh<H)crop.y=(H-dh)/2;else crop.y=Math.min(0,Math.max(H-dh,crop.y));cropCtx.drawImage(img,crop.x,crop.y,dw,dh)}function buildPreview(){if(!img){msg(imageMsg,'pick image','error');return}drawCrop();var data=cropCtx.getImageData(0,0,W,H),p=data.data,bw=new Uint8Array(LEN),red=new Uint8Array(LEN),fast=E('refreshSelect').value==='bw',algo=E('algoSelect').value,gray=new Uint8Array(W*H),diffuseMode=(algo==='fs'||algo==='fs_vivid'||algo==='fs_clean'||algo==='atkinson');bw.fill(255);red.fill(255);if(diffuseMode)errorDiffuse(p,W,H,algo,fast);for(var gi=0;gi<W*H;gi++){var go=gi*4;gray[gi]=luminance(p[go],p[go+1],p[go+2])}for(var y=0;y<H;y++){for(var x=0;x<W;x++){var i=(y*W+x)*4,c;if(diffuseMode)c=(p[i]===255&&p[i+1]===0&&p[i+2]===0)?2:((p[i]===0&&p[i+1]===0&&p[i+2]===0)?1:0);else c=classifyPixel(p[i],p[i+1],p[i+2],x,y,algo,fast);if(algo==='edge'&&c===0&&isEdge(gray,x,y))c=1;if(c===2)setPix(red,x,y,1);else if(c===1)setPix(bw,x,y,1)}}if(algo==='clean'||algo==='fs_clean')denoisePlanes(bw,red);for(var yy=0;yy<H;yy++){for(var xx=0;xx<W;xx++){var o=(yy*W+xx)*4;if(getPix(red,xx,yy)){p[o]=255;p[o+1]=0;p[o+2]=0}else if(getPix(bw,xx,yy)){p[o]=0;p[o+1]=0;p[o+2]=0}else{p[o]=255;p[o+1]=255;p[o+2]=255}p[o+3]=255}}previewCtx.putImageData(data,0,0);frame=new Uint8Array(1+LEN*2);frame[0]=fast?1:0;frame.set(bw,1);frame.set(red,1+LEN);msg(imageMsg,'preview '+frame.length+'B','success')}"
 "function uploadFrame(){if(!frame){msg(imageMsg,'preview first','error');return}msg(imageMsg,'probe...');req('POST','/api/upload/probe','probe','text/plain',function(){msg(imageMsg,'upload...');req('POST','/api/frame/upload',frame,'application/octet-stream',function(d){msg(imageMsg,d.message||'ok','success')},function(e){msg(imageMsg,e,'error')})},function(e){msg(imageMsg,e,'error')})}function pickChanged(){var f=imageFile.files&&imageFile.files[0];frame=null;if(!f){fileName.innerHTML='-';return}fileName.innerHTML=f.name;var r=new FileReader();r.onload=function(){var im=new Image();im.onload=function(){img=im;crop.x=0;crop.y=0;drawCrop();msg(imageMsg,'loaded','success')};im.src=r.result};r.readAsDataURL(f)}"
-"function point(ev){var r=cropCanvas.getBoundingClientRect(),e=ev.touches&&ev.touches.length?ev.touches[0]:ev;return{x:(e.clientX-r.left)*W/r.width,y:(e.clientY-r.top)*H/r.height}}function down(ev){if(!img)return;if(ev.preventDefault)ev.preventDefault();var p=point(ev);crop.drag=true;crop.lx=p.x;crop.ly=p.y}function move(ev){if(!crop.drag||!img)return;if(ev.preventDefault)ev.preventDefault();var p=point(ev);crop.x+=p.x-crop.lx;crop.y+=p.y-crop.ly;crop.lx=p.x;crop.ly=p.y;frame=null;drawCrop()}function up(){crop.drag=false}function rec(){msg(audioMsg,'record...');req('POST','/api/record',null,null,function(d){msg(audioMsg,d.message||'ok','success');setTimeout(status,1200)},function(e){msg(audioMsg,e,'error')})}function cal(){msg(calendarMsg,'draw...');req('POST','/api/calendar',JSON.stringify({timestamp:Math.floor(new Date().getTime()/1000)}),'application/json',function(d){msg(calendarMsg,d.message||'ok','success')},function(e){msg(calendarMsg,e,'error')})}function memo(){var items=[],i,t;for(i=1;i<=3;i++){t=E('memo'+i).value;if(t){items.push({text:t,checked:E('done'+i).checked})}}if(!items.length){msg(memoMsg,'empty','error');return}msg(memoMsg,'draw...');req('POST','/api/memo',JSON.stringify({items:items}),'application/json',function(d){msg(memoMsg,d.message||'ok','success')},function(e){msg(memoMsg,e,'error')})}"
-"addEv(E('scanBtn'),'click',scan);addEv(E('connectBtn'),'click',connectWifi);addEv(E('pickBtn'),'click',function(){try{imageFile.click()}catch(e){}});addEv(imageFile,'change',pickChanged);addEv(E('previewBtn'),'click',buildPreview);addEv(E('uploadBtn'),'click',uploadFrame);addEv(E('recordBtn'),'click',rec);addEv(E('calendarBtn'),'click',cal);addEv(E('memoBtn'),'click',memo);addEv(cropCanvas,'mousedown',down);addEv(cropCanvas,'mousemove',move);addEv(cropCanvas,'mouseup',up);addEv(cropCanvas,'mouseleave',up);addEv(cropCanvas,'touchstart',down);addEv(cropCanvas,'touchmove',move);addEv(cropCanvas,'touchend',up);addEv(E('zoomRange'),'input',function(){frame=null;drawCrop()});status();scan();setInterval(status,5000);"
+"function point(ev){var r=cropCanvas.getBoundingClientRect(),e=ev.touches&&ev.touches.length?ev.touches[0]:ev;return{x:(e.clientX-r.left)*W/r.width,y:(e.clientY-r.top)*H/r.height}}function down(ev){if(!img)return;if(ev.preventDefault)ev.preventDefault();var p=point(ev);crop.drag=true;crop.lx=p.x;crop.ly=p.y}function move(ev){if(!crop.drag||!img)return;if(ev.preventDefault)ev.preventDefault();var p=point(ev);crop.x+=p.x-crop.lx;crop.y+=p.y-crop.ly;crop.lx=p.x;crop.ly=p.y;frame=null;drawCrop()}function up(){crop.drag=false}function cal(){msg(calendarMsg,'draw...');req('POST','/api/calendar',JSON.stringify({timestamp:Math.floor(new Date().getTime()/1000)}),'application/json',function(d){msg(calendarMsg,d.message||'ok','success')},function(e){msg(calendarMsg,e,'error')})}function memo(){var items=[],i,t;for(i=1;i<=3;i++){t=E('memo'+i).value;if(t){items.push({text:t,checked:E('done'+i).checked})}}if(!items.length){msg(memoMsg,'empty','error');return}msg(memoMsg,'draw...');req('POST','/api/memo',JSON.stringify({items:items}),'application/json',function(d){msg(memoMsg,d.message||'ok','success')},function(e){msg(memoMsg,e,'error')})}"
+"addEv(E('scanBtn'),'click',scan);addEv(E('connectBtn'),'click',connectWifi);addEv(E('pickBtn'),'click',function(){try{imageFile.click()}catch(e){}});addEv(imageFile,'change',pickChanged);addEv(E('previewBtn'),'click',buildPreview);addEv(E('uploadBtn'),'click',uploadFrame);addEv(E('recordsBtn'),'click',loadRecords);addEv(E('deleteRecordBtn'),'click',deleteRecord);addEv(E('calendarBtn'),'click',cal);addEv(E('memoBtn'),'click',memo);addEv(cropCanvas,'mousedown',down);addEv(cropCanvas,'mousemove',move);addEv(cropCanvas,'mouseup',up);addEv(cropCanvas,'mouseleave',up);addEv(cropCanvas,'touchstart',down);addEv(cropCanvas,'touchmove',move);addEv(cropCanvas,'touchend',up);addEv(E('zoomRange'),'input',function(){frame=null;drawCrop()});status();scan();loadRecords();setInterval(status,5000);"
 "</script></body></html>";
 static void portal_copy_str(char *dst, const char *src, size_t dst_size)
 {
@@ -364,39 +362,6 @@ static esp_err_t portal_connect_sta(const char *ssid, const char *password)
     return esp_wifi_connect();
 }
 
-static void portal_autoconnect_task(void *arg)
-{
-    (void)arg;
-    while (true) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-        portal_load_credentials();
-        if (!s_portal.credentials_loaded) {
-            ESP_LOGI(TAG, "[WiFi] No saved STA credentials; stay in AP portal mode");
-            s_portal.autoconnect_requested = false;
-            continue;
-        }
-
-        if (CONFIG_AUDIO_PORTAL_STA_AUTOCONNECT_DELAY_MS > 0) {
-            ESP_LOGI(TAG, "[WiFi] Saved STA autoconnect waits %d ms; AP stays discoverable first",
-                CONFIG_AUDIO_PORTAL_STA_AUTOCONNECT_DELAY_MS);
-            vTaskDelay(pdMS_TO_TICKS(CONFIG_AUDIO_PORTAL_STA_AUTOCONNECT_DELAY_MS));
-        }
-
-        if (s_portal.sta_connected) {
-            s_portal.autoconnect_requested = false;
-            continue;
-        }
-
-        ESP_LOGI(TAG, "[WiFi] Auto-connecting saved STA SSID: %s", s_portal.ssid);
-        esp_err_t err = portal_connect_sta(s_portal.ssid, s_portal.password);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "[WiFi] Saved STA autoconnect failed to start: %s", esp_err_to_name(err));
-        }
-        s_portal.autoconnect_requested = false;
-    }
-}
-
 static void portal_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
@@ -446,8 +411,6 @@ static esp_err_t portal_wifi_init(void)
     ESP_RETURN_ON_ERROR(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, portal_event_handler, NULL), TAG, "wifi handler failed");
     ESP_RETURN_ON_ERROR(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, portal_event_handler, NULL), TAG, "ip handler failed");
     ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "wifi storage failed");
-
-    xTaskCreate(portal_autoconnect_task, "portal_auto_sta", 4096, NULL, 3, &s_portal.autoconnect_task);
 
     s_portal.wifi_initialized = true;
     return ESP_OK;
@@ -695,6 +658,114 @@ static esp_err_t trigger_record_handler(httpd_req_t *req)
     return send_message(req, 200, "Recording started");
 }
 
+static bool record_name_is_safe(const char *name)
+{
+    size_t len;
+
+    if ((name == NULL) || (name[0] == '\0')) {
+        return false;
+    }
+    if ((strstr(name, "..") != NULL) || (strchr(name, '/') != NULL) || (strchr(name, '\\') != NULL)) {
+        return false;
+    }
+    len = strlen(name);
+    return (len > 4U) && (len < 32U) && (strcmp(name + len - 4U, ".wav") == 0);
+}
+
+static bool record_path_from_name(char *path, size_t path_size, const char *name)
+{
+    static const char prefix[] = "/spiffs/";
+    size_t prefix_len = sizeof(prefix) - 1U;
+    size_t name_len;
+
+    if ((path == NULL) || !record_name_is_safe(name)) {
+        return false;
+    }
+    name_len = strlen(name);
+    if ((prefix_len + name_len + 1U) > path_size) {
+        return false;
+    }
+    memcpy(path, prefix, prefix_len);
+    memcpy(path + prefix_len, name, name_len + 1U);
+    return true;
+}
+
+static esp_err_t records_handler(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON *records = cJSON_CreateArray();
+    struct stat st;
+    esp_err_t err;
+
+    ESP_LOGI(TAG, "[HTTP] GET /api/records");
+    if ((root == NULL) || (records == NULL)) {
+        cJSON_Delete(root);
+        cJSON_Delete(records);
+        return ESP_ERR_NO_MEM;
+    }
+
+    if (stat("/spiffs/record.wav", &st) == 0) {
+        cJSON *item = cJSON_CreateObject();
+        if (item == NULL) {
+            cJSON_Delete(root);
+            return ESP_ERR_NO_MEM;
+        }
+        cJSON_AddStringToObject(item, "name", "record.wav");
+        cJSON_AddNumberToObject(item, "size", (double)st.st_size);
+        cJSON_AddItemToArray(records, item);
+    }
+
+    cJSON_AddItemToObject(root, "records", records);
+    err = send_json(req, root);
+    cJSON_Delete(root);
+    return err;
+}
+
+static esp_err_t play_record_handler(httpd_req_t *req)
+{
+    char body[128];
+    char path[48];
+    cJSON *root;
+    const cJSON *name;
+    esp_err_t err;
+
+    ESP_LOGI(TAG, "[HTTP] POST /api/record/play");
+    ESP_RETURN_ON_ERROR(read_body(req, body, sizeof(body)), TAG, "read play body failed");
+    root = cJSON_Parse(body);
+    ESP_RETURN_ON_FALSE(root != NULL, ESP_ERR_INVALID_ARG, TAG, "play json failed");
+
+    name = cJSON_GetObjectItem(root, "name");
+    if (!cJSON_IsString(name) || !record_path_from_name(path, sizeof(path), name->valuestring)) {
+        cJSON_Delete(root);
+        return send_message(req, 400, "Recording name is invalid");
+    }
+    cJSON_Delete(root);
+
+    err = recording_service_play_file(path);
+    if (err != ESP_OK) {
+        return send_message(req, 400, "Device playback unavailable or already running");
+    }
+    return send_message(req, 200, "Device playback started");
+}
+
+static esp_err_t delete_record_handler(httpd_req_t *req)
+{
+    esp_err_t err;
+
+    ESP_LOGI(TAG, "[HTTP] POST /api/record/delete");
+    err = recording_service_delete_recording();
+    if (err == ESP_ERR_INVALID_STATE) {
+        return send_message(req, 400, "Recording or playback is active");
+    }
+    if (err == ESP_ERR_NOT_FOUND) {
+        return send_message(req, 404, "Recording not found");
+    }
+    if (err != ESP_OK) {
+        return send_message(req, 500, "Delete failed");
+    }
+    return send_message(req, 200, "Recording deleted");
+}
+
 static esp_err_t download_record_handler(httpd_req_t *req)
 {
     const char *path = recording_service_get_file_path();
@@ -705,9 +776,22 @@ static esp_err_t download_record_handler(httpd_req_t *req)
     char record_size[16];
     char record_id[16];
     char disposition[80];
+    char query[96] = { 0 };
+    char name[40] = { 0 };
+    char selected_path[48];
     size_t read_bytes;
 
     recording_service_get_status(&rec);
+    if ((httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) &&
+        (httpd_query_key_value(query, "name", name, sizeof(name)) == ESP_OK) &&
+        record_name_is_safe(name)) {
+        if (!record_path_from_name(selected_path, sizeof(selected_path), name)) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad recording name");
+            return ESP_FAIL;
+        }
+        path = selected_path;
+        strlcpy(rec.download_name, name, sizeof(rec.download_name));
+    }
     if (stat(path, &st) != 0) {
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "recording not found");
         return ESP_FAIL;
@@ -767,7 +851,7 @@ static esp_err_t portal_start_http_server(void)
         return ESP_OK;
     }
 
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 18;
     config.max_resp_headers = 12;
     config.stack_size = 8192;
     config.lru_purge_enable = true;
@@ -785,6 +869,9 @@ static esp_err_t portal_start_http_server(void)
         { .uri = "/api/calendar", .method = HTTP_POST, .handler = calendar_handler },
         { .uri = "/api/memo", .method = HTTP_POST, .handler = memo_handler },
         { .uri = "/api/record", .method = HTTP_POST, .handler = trigger_record_handler },
+        { .uri = "/api/records", .method = HTTP_GET, .handler = records_handler },
+        { .uri = "/api/record/play", .method = HTTP_POST, .handler = play_record_handler },
+        { .uri = "/api/record/delete", .method = HTTP_POST, .handler = delete_record_handler },
         { .uri = "/api/record.wav", .method = HTTP_GET, .handler = download_record_handler },
         { .uri = "/generate_204", .method = HTTP_GET, .handler = redirect_handler },
         { .uri = "/gen_204", .method = HTTP_GET, .handler = redirect_handler },
@@ -846,11 +933,7 @@ esp_err_t portal_service_start(void)
     }
     ESP_RETURN_ON_ERROR(portal_enable_ap(), TAG, "enable AP failed");
     ESP_RETURN_ON_ERROR(portal_start_http_server(), TAG, "http server failed");
-    if ((s_portal.autoconnect_task != NULL) && !s_portal.autoconnect_requested) {
-        s_portal.autoconnect_requested = true;
-        xTaskNotifyGive(s_portal.autoconnect_task);
-    }
-    ESP_LOGI(TAG, "[OK] Portal AP is ready; saved STA autoconnect is delayed");
+    ESP_LOGI(TAG, "[OK] Portal AP is ready; saved STA autoconnect disabled while portal is open");
     return ESP_OK;
 }
 
