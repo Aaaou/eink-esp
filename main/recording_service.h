@@ -21,5 +21,6 @@ typedef struct {
 
 esp_err_t recording_service_init(void);
 esp_err_t recording_service_trigger(void);
+esp_err_t recording_service_play_file(const char *path);
 void recording_service_get_status(recording_status_t *status);
 const char *recording_service_get_file_path(void);

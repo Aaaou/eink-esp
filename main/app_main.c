@@ -2,6 +2,8 @@
 #include "board_bringup.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "nvs_flash.h"
 #include "portal_service.h"
 #include "recording_service.h"
@@ -28,16 +30,17 @@ void app_main(void)
         return;
     }
 
+    ESP_ERROR_CHECK(storage_service_init());
+    ESP_ERROR_CHECK(portal_service_init());
+    ESP_ERROR_CHECK(recording_service_init());
+
 #if CONFIG_AUDIO_BOOT_TEST_TONE
+    vTaskDelay(pdMS_TO_TICKS(200));
     err = audio_play_test_tone(CONFIG_AUDIO_BOOT_TEST_TONE_MS);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "[!] Boot speaker test tone failed: %s", esp_err_to_name(err));
     }
 #endif
 
-    ESP_ERROR_CHECK(storage_service_init());
-    ESP_ERROR_CHECK(portal_service_init());
-    ESP_ERROR_CHECK(recording_service_init());
-
-    ESP_LOGI(TAG, "[OK] Initialization complete; short press BOOT to record, long press BOOT to start AP");
+    ESP_LOGI(TAG, "[OK] Initialization complete; short press BOOT to record/play, long press BOOT to start APSTA");
 }
