@@ -235,6 +235,12 @@ bool Assets::LvglStrategy::Apply(Assets* assets, bool refresh_display_theme) {
 
     Assets::LoadSrmodelsFromIndex(assets, root);
 
+#if CONFIG_BOARD_TYPE_EINK_C3_BOARD
+    cJSON_Delete(root);
+    ESP_LOGI(TAG, "Skip LVGL theme assets on eink-c3-board");
+    return true;
+#endif
+
     auto& theme_manager = LvglThemeManager::GetInstance();
     auto light_theme = theme_manager.GetTheme("light");
     auto dark_theme = theme_manager.GetTheme("dark");
