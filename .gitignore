@@ -1,35 +1,20 @@
-# ESP-IDF build output
-/build/
-/sdkconfig
-/sdkconfig.old
-
-# CMake / Ninja
-/.cache/
-/.cmake/
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-build.ninja
-.ninja_deps
-.ninja_log
-
-# IDE / editor
-/.vscode/
-/.idea/
+tmp/
+components/
+managed_components/
+build/
+dist/
+.vscode/
+.devcontainer/
+sdkconfig.old
+sdkconfig
+dependencies.lock
+.env
+releases/
+main/assets/lang_config.h
+main/mmap_generate_emoji.h
+.DS_Store
+.cache
+*.pyc
+*.bin
+mmap_generate_*.h
 .clangd
-*.code-workspace
-
-# ESP-IDF managed dependencies cache
-/managed_components/
-/dependencies.lock
-
-# Local archives
-*.zip
-
-# Logs and temporary files
-*.log
-*.tmp
-*.bak
-*.swp
-Thumbs.db
-Desktop.ini

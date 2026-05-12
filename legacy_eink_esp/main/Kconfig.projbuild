@@ -1,0 +1,238 @@
+﻿menu "Ink ESP"
+
+config INK_RUN_EINK_BRINGUP_ON_BOOT
+    bool "Run e-ink bring-up drawing on boot"
+    default n
+    help
+        Enable the panel validation draw sequence during boot. Keep this off
+        for product-style startup so the display is not refreshed automatically.
+
+choice INK_PANEL_MODEL
+    prompt "E-ink panel driver model"
+    default INK_PANEL_MODEL_213_UC8151D_Z19C
+
+    config INK_PANEL_MODEL_213_UC8151D_Z19C
+        bool "2.13-inch UC8151D Z19c (GxEPD2_213_Z19c)"
+        help
+            104x212 tri-color panel aligned to the GxEPD2_213_Z19c reference path.
+endchoice
+
+config INK_PANEL_POWER_ON_TIME_MS
+    int "E-ink power-on wait (ms)"
+    range 20 500
+    default 100
+    help
+        Fixed wait after panel power-on when BUSY is not connected.
+
+config INK_PANEL_POWER_OFF_TIME_MS
+    int "E-ink power-off wait (ms)"
+    range 10 500
+    default 50
+    help
+        Fixed wait after panel power-off when BUSY is not connected.
+
+config INK_PANEL_CLEAR_REFRESH_TIME_MS
+    int "E-ink clear refresh wait (ms)"
+    range 4000 20000
+    default 12000
+    help
+        Fixed wait for the white-clear stage. The official Z19c reference uses
+        about 17000ms; most 2.13-inch tri-color panels are closer to 12000-15000ms.
+
+config INK_PANEL_FULL_REFRESH_TIME_MS
+    int "E-ink full refresh wait (ms)"
+    range 8000 20000
+    default 15000
+    help
+        Fixed wait for the full draw stage. Official Z19c reference uses about
+        17000ms; this default is reduced toward the common 2.13-inch tri-color baseline.
+
+config INK_PANEL_CLEAR_BEFORE_DRAW
+    bool "Run clear-white stage before drawing"
+    default n
+    help
+        Enable the extra bring-up validation step that clears the panel to white
+        before drawing the test pattern. Keep this off for normal startup flows.
+
+choice INK_SCENE_CJK_FONT
+    prompt "CJK font for e-ink scenes"
+    default INK_SCENE_CJK_FONT_PUHUI_14
+    help
+        Select the CJK font used by firmware-rendered scenes such as memos.
+        PuHui 14 is copied from the xiaozhi font component and is a compact
+        1bpp font suitable for the 2.13-inch black/white e-paper path.
+
+    config INK_SCENE_CJK_FONT_PUHUI_14
+        bool "Alibaba PuHui 14 1bpp"
+        help
+            Use xiaozhi's font_puhui_14_1 glyph set. This covers common Chinese
+            memo text much better than LVGL's small SourceHanSansSC CJK subset.
+
+    config INK_SCENE_CJK_FONT_SOURCE_HAN_14
+        bool "LVGL SourceHanSansSC 14 CJK subset"
+        depends on LV_FONT_SOURCE_HAN_SANS_SC_14_CJK
+        help
+            Use LVGL's built-in SourceHanSansSC 14 CJK subset. This is smaller
+            in project source files but misses some common simplified Chinese
+            characters such as fan/sleep/wake in memo text.
+endchoice
+
+config AUDIO_RECORD_BUTTON_GPIO
+    int "Audio record trigger button GPIO"
+    range 0 21
+    default 9
+    help
+        Pressing this button starts a short recording test.
+
+config AUDIO_RECORD_DURATION_MS
+    int "Audio recording duration (ms)"
+    range 1000 10000
+    default 5000
+    help
+        Maximum duration for each test recording.
+
+config AUDIO_RECORD_SAMPLE_RATE
+    int "Audio recording sample rate (Hz)"
+    range 8000 48000
+    default 24000
+    help
+        Sample rate used for I2S capture and WAV export.
+
+config AUDIO_ES8311_INPUT_GAIN_DB
+    int "ES8311 microphone input gain (dB)"
+    range 0 42
+    default 30
+    help
+        Microphone gain passed to esp_codec_dev_set_in_gain(). The ES8311
+        driver maps this to 0, 6, 12, 18, 24, 30, 36, or 42 dB hardware gain.
+
+config AUDIO_PLAYBACK_VOLUME
+    int "ES8311 playback volume"
+    range 0 100
+    default 100
+    help
+        Volume used for startup tone and local RAM loopback playback.
+
+config AUDIO_CAPTURE_PROCESSING
+    bool "Apply lightweight microphone processing"
+    default n
+    help
+        Apply a low-cost microphone chain during capture: high-pass DC removal,
+        noise gate, adaptive gain, and soft limiting. Keep this disabled for
+        the Moji-style ES8311 baseline test.
+
+config AUDIO_CAPTURE_NOISE_GATE
+    bool "Apply microphone noise gate"
+    default n
+    depends on AUDIO_CAPTURE_PROCESSING
+    help
+        Suppress very low-level idle noise before recording/playback.
+
+config AUDIO_CAPTURE_AGC
+    bool "Apply microphone automatic gain"
+    default y
+    depends on AUDIO_CAPTURE_PROCESSING
+    help
+        Raise quieter speech while preventing close speech from clipping.
+
+config AUDIO_CAPTURE_AGC_TARGET_AVG
+    int "Microphone AGC target average amplitude"
+    range 300 6000
+    default 1100
+    depends on AUDIO_CAPTURE_AGC
+    help
+        Target short-term average absolute amplitude after AGC.
+
+config AUDIO_CAPTURE_AGC_MAX_GAIN_X100
+    int "Microphone AGC maximum gain x100"
+    range 100 1200
+    default 250
+    depends on AUDIO_CAPTURE_AGC
+    help
+        Maximum AGC gain. 250 means 2.5x and 500 means 5.0x.
+
+config AUDIO_CAPTURE_SOFT_LIMITER
+    bool "Apply microphone soft limiter"
+    default y
+    depends on AUDIO_CAPTURE_PROCESSING
+    help
+        Smoothly limit peaks near full scale instead of hard clipping.
+
+config AUDIO_LOOPBACK_DC_BLOCK
+    bool "Apply DC blocker before RAM loopback playback"
+    default y
+    help
+        Remove DC/very low frequency offset from recorded PCM during local
+        RAM loopback playback. This does not change the captured statistics;
+        it only prevents low-frequency bias from sounding like speaker
+        distortion during bring-up.
+
+config AUDIO_BOOT_TEST_TONE
+    bool "Play speaker test tone on boot"
+    default y
+    help
+        Play a short generated tone after ES8311 and I2S initialization. This
+        isolates the playback path from microphone capture while bringing up
+        a new board.
+
+config AUDIO_BOOT_TEST_TONE_MS
+    int "Boot speaker test tone duration (ms)"
+    range 100 3000
+    default 700
+    depends on AUDIO_BOOT_TEST_TONE
+    help
+        Duration of the generated speaker test tone played during startup.
+
+config AUDIO_RECORD_I2S_RAW_DIAG
+    bool "Log raw I2S capture diagnostics"
+    default y
+    help
+        Print a short raw I2S frame dump and alternate sample interpretations
+        during recording. This is useful while validating ES8311 slot width,
+        bit alignment, and ADC output on a new board.
+
+config AUDIO_PORTAL_AP_SSID
+    string "Audio portal AP SSID"
+    default "INK-ESP-AUDIO"
+    help
+        SoftAP name used for the local audio export portal.
+
+config AUDIO_PORTAL_WIFI_START_DELAY_MS
+    int "Audio portal Wi-Fi start delay (ms)"
+    range 0 10000
+    default 2000
+    help
+        Delay before starting SoftAP to reduce startup current overlap.
+
+config AUDIO_PORTAL_WIFI_MAX_TX_POWER_QDBM
+    int "Audio portal Wi-Fi max TX power (0.25 dBm units)"
+    range 8 84
+    default 32
+    help
+        Wi-Fi max TX power in quarter-dBm units. 32 means 8 dBm, which is
+        enough for short-range phone connection while reducing power peaks.
+
+config AUDIO_PORTAL_BUTTON_LONG_PRESS_MS
+    int "Audio portal BOOT long-press threshold (ms)"
+    range 1000 10000
+    default 3000
+    help
+        Hold BOOT for this long to start the export hotspot.
+
+config AUDIO_PORTAL_STA_AUTOCONNECT_DELAY_MS
+    int "Audio portal saved Wi-Fi autoconnect delay (ms)"
+    range 0 60000
+    default 15000
+    help
+        Delay after the local SoftAP portal is ready before reconnecting to
+        saved STA credentials. This gives phones time to discover and open the
+        local portal before APSTA channel follows the upstream router.
+
+config AUDIO_PORTAL_DIAGNOSTIC_WIFI_ONLY
+    bool "Start minimal Wi-Fi only for long-press diagnostics"
+    default n
+    help
+        When enabled, long-press BOOT starts only the minimal SoftAP path
+        without HTTP portal services. Use this to isolate Wi-Fi startup issues.
+
+endmenu
