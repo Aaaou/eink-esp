@@ -25,6 +25,7 @@ public:
     virtual void ClearChatMessages() override;
     virtual void SetPowerSaveMode(bool on) override;
     virtual void SetupUI() override;
+    void ShowRunningStatusWithDate();
 
 private:
     static constexpr size_t kBufferSize = 104 * 212 / 8;
@@ -52,6 +53,7 @@ private:
     esp_err_t SendRepeat(uint8_t value, size_t len);
     esp_err_t PowerOn();
     esp_err_t PowerOff();
+    esp_err_t SleepPanel();
     esp_err_t InitPanel();
     esp_err_t SetPartialRamArea(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
     esp_err_t WritePlane(uint8_t command, const uint8_t* bitmap);
@@ -60,9 +62,17 @@ private:
     esp_err_t RefreshFrame();
     void ClearFrame();
     void SetPixel(int x, int y, bool black);
+    void SetLandscapePixel(int x, int y, bool black);
     void DrawCenteredAscii(int center_x, int y, const char* text, int scale);
     void DrawAsciiText(int x, int y, const char* text, int scale);
     void DrawAsciiChar(int x, int y, char c, int scale);
+    void DrawLandscapeCenteredAscii(int center_x, int y, const char* text, int scale);
+    void DrawLandscapeAsciiText(int x, int y, const char* text, int scale);
+    void DrawLandscapeAsciiChar(int x, int y, char c, int scale);
+    void DrawLandscapeHLine(int x, int y, int w);
+    void DrawLandscapeVLine(int x, int y, int h);
+    void DrawLandscapeRect(int x, int y, int w, int h);
+    void FillLandscapeRect(int x, int y, int w, int h);
     void RenderMessage(const char* status, const char* content);
     void QueuePresent(const char* status, const char* content);
     void RefreshTask();

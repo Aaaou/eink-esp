@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
+#include <ctime>
 
 #include <esp_check.h>
 #include <esp_log.h>
@@ -14,10 +16,9 @@
 
 static const char* TAG = "EinkEpaperDisplay";
 
-static constexpr uint32_t kPanelPowerOnTimeMs = 120;
-static constexpr uint32_t kPanelPowerOffTimeMs = 80;
-static constexpr uint32_t kPanelFullRefreshTimeMs = 4500;
-static constexpr uint32_t kPanelClearRefreshTimeMs = 4500;
+static constexpr uint32_t kPanelPowerOnTimeMs = 100;
+static constexpr uint32_t kPanelPowerOffTimeMs = 50;
+static constexpr uint32_t kPanelFullRefreshTimeMs = 15000;
 
 struct AsciiGlyph {
     char ch;
@@ -117,7 +118,26 @@ void EinkEpaperDisplay::SetPowerSaveMode(bool on) {
 void EinkEpaperDisplay::SetupUI() {
     Display::SetupUI();
     ESP_LOGI(TAG, "SetupUI");
-    QueuePresent("XIAOZHI", "EINK OK");
+}
+
+void EinkEpaperDisplay::ShowRunningStatusWithDate() {
+    time_t now = time(nullptr);
+    struct tm timeinfo = {};
+    localtime_r(&now, &timeinfo);
+
+    char date[32];
+    if (timeinfo.tm_year >= 100) {
+        int year = timeinfo.tm_year + 1900;
+        int month = std::max(1, std::min(12, timeinfo.tm_mon + 1));
+        int day = std::max(1, std::min(31, timeinfo.tm_mday));
+        std::snprintf(date, sizeof(date), "%04d-%02d-%02d",
+            year,
+            month,
+            day);
+    } else {
+        std::snprintf(date, sizeof(date), "DATE READY");
+    }
+    QueuePresent("XIAOZHI RUN", date);
 }
 
 void EinkEpaperDisplay::InitializePanelPower() {
@@ -234,6 +254,15 @@ esp_err_t EinkEpaperDisplay::PowerOff() {
     return ESP_OK;
 }
 
+esp_err_t EinkEpaperDisplay::SleepPanel() {
+    ESP_RETURN_ON_ERROR(PowerOff(), TAG, "power off before sleep failed");
+    ESP_RETURN_ON_ERROR(SendCommand(0x07), TAG, "sleep command failed");
+    ESP_RETURN_ON_ERROR(SendDataByte(0xA5), TAG, "sleep data failed");
+    vTaskDelay(pdMS_TO_TICKS(10));
+    // Keep BOARD_IOX_BIT_EINK_CTRL_4150B high. On this board it also gates the audio amplifier path.
+    return ESP_OK;
+}
+
 esp_err_t EinkEpaperDisplay::InitPanel() {
     const uint8_t resolution[] = {
         static_cast<uint8_t>(DISPLAY_WIDTH),
@@ -295,19 +324,17 @@ esp_err_t EinkEpaperDisplay::RefreshFrame() {
     ESP_RETURN_ON_ERROR(BeginSession(), TAG, "begin session failed");
 
     if (first_frame_) {
-        ESP_RETURN_ON_ERROR(WriteFullPlane(0x10, previous_frame_.data()), TAG, "old clear plane failed");
-        ESP_RETURN_ON_ERROR(WriteFullPlane(0x13, previous_frame_.data()), TAG, "new clear plane failed");
-        ESP_RETURN_ON_ERROR(SendCommand(0x12), TAG, "clear refresh failed");
-        vTaskDelay(pdMS_TO_TICKS(kPanelClearRefreshTimeMs));
+        ESP_RETURN_ON_ERROR(WriteFullPlaneRepeat(0x10, 0xFF), TAG, "initial old plane failed");
+        ESP_RETURN_ON_ERROR(WriteFullPlaneRepeat(0x13, 0xFF), TAG, "initial new plane failed");
         first_frame_ = false;
     }
 
     ESP_RETURN_ON_ERROR(WriteFullPlane(0x10, frame_.data()), TAG, "black plane failed");
-    ESP_RETURN_ON_ERROR(WriteFullPlaneRepeat(0x13, 0xFF), TAG, "white color plane failed");
+    ESP_RETURN_ON_ERROR(WriteFullPlaneRepeat(0x13, 0xFF), TAG, "color plane failed");
     ESP_RETURN_ON_ERROR(SendCommand(0x12), TAG, "refresh failed");
     vTaskDelay(pdMS_TO_TICKS(kPanelFullRefreshTimeMs));
     previous_frame_ = frame_;
-    return PowerOff();
+    return SleepPanel();
 }
 
 void EinkEpaperDisplay::ClearFrame() {
@@ -328,6 +355,13 @@ void EinkEpaperDisplay::SetPixel(int x, int y, bool black) {
     }
 }
 
+void EinkEpaperDisplay::SetLandscapePixel(int x, int y, bool black) {
+    if (x < 0 || x >= DISPLAY_HEIGHT || y < 0 || y >= DISPLAY_WIDTH) {
+        return;
+    }
+    SetPixel(y, DISPLAY_HEIGHT - 1 - x, black);
+}
+
 void EinkEpaperDisplay::DrawAsciiChar(int x, int y, char c, int scale) {
     const auto& glyph = FindAsciiGlyph(c);
     for (int row = 0; row < 7; ++row) {
@@ -340,6 +374,60 @@ void EinkEpaperDisplay::DrawAsciiChar(int x, int y, char c, int scale) {
                 }
             }
         }
+    }
+}
+
+void EinkEpaperDisplay::DrawLandscapeAsciiChar(int x, int y, char c, int scale) {
+    const auto& glyph = FindAsciiGlyph(c);
+    for (int row = 0; row < 7; ++row) {
+        for (int col = 0; col < 5; ++col) {
+            if ((glyph.rows[row] >> (4 - col)) & 0x01) {
+                for (int sy = 0; sy < scale; ++sy) {
+                    for (int sx = 0; sx < scale; ++sx) {
+                        SetLandscapePixel(x + col * scale + sx, y + row * scale + sy, true);
+                    }
+                }
+            }
+        }
+    }
+}
+
+void EinkEpaperDisplay::DrawLandscapeAsciiText(int x, int y, const char* text, int scale) {
+    int cursor_x = x;
+    for (size_t i = 0; text != nullptr && text[i] != '\0'; ++i) {
+        DrawLandscapeAsciiChar(cursor_x, y, text[i], scale);
+        cursor_x += 6 * scale;
+    }
+}
+
+void EinkEpaperDisplay::DrawLandscapeCenteredAscii(int center_x, int y, const char* text, int scale) {
+    int len = text ? std::strlen(text) : 0;
+    int width = len > 0 ? (len * 5 * scale) + ((len - 1) * scale) : 0;
+    DrawLandscapeAsciiText(center_x - width / 2, y, text, scale);
+}
+
+void EinkEpaperDisplay::DrawLandscapeHLine(int x, int y, int w) {
+    for (int ix = x; ix < x + w; ++ix) {
+        SetLandscapePixel(ix, y, true);
+    }
+}
+
+void EinkEpaperDisplay::DrawLandscapeVLine(int x, int y, int h) {
+    for (int iy = y; iy < y + h; ++iy) {
+        SetLandscapePixel(x, iy, true);
+    }
+}
+
+void EinkEpaperDisplay::DrawLandscapeRect(int x, int y, int w, int h) {
+    DrawLandscapeHLine(x, y, w);
+    DrawLandscapeHLine(x, y + h - 1, w);
+    DrawLandscapeVLine(x, y, h);
+    DrawLandscapeVLine(x + w - 1, y, h);
+}
+
+void EinkEpaperDisplay::FillLandscapeRect(int x, int y, int w, int h) {
+    for (int iy = y; iy < y + h; ++iy) {
+        DrawLandscapeHLine(x, iy, w);
     }
 }
 
@@ -360,36 +448,18 @@ void EinkEpaperDisplay::DrawCenteredAscii(int center_x, int y, const char* text,
 void EinkEpaperDisplay::RenderMessage(const char* status, const char* content) {
     ClearFrame();
 
-    for (int x = 0; x < DISPLAY_WIDTH; ++x) {
-        SetPixel(x, 0, true);
-        SetPixel(x, 1, true);
-        SetPixel(x, DISPLAY_HEIGHT - 2, true);
-        SetPixel(x, DISPLAY_HEIGHT - 1, true);
-    }
-    for (int y = 0; y < DISPLAY_HEIGHT; ++y) {
-        SetPixel(0, y, true);
-        SetPixel(1, y, true);
-        SetPixel(DISPLAY_WIDTH - 2, y, true);
-        SetPixel(DISPLAY_WIDTH - 1, y, true);
-    }
+    DrawLandscapeRect(2, 2, DISPLAY_HEIGHT - 4, DISPLAY_WIDTH - 4);
+    FillLandscapeRect(10, 12, 192, 14);
+    DrawLandscapeCenteredAscii(106, 36, status && status[0] ? status : "XIAOZHI RUN", 2);
+    DrawLandscapeHLine(18, 62, 176);
+    DrawLandscapeCenteredAscii(106, 72, content && content[0] ? content : "DATE READY", 1);
+    DrawLandscapeCenteredAscii(106, 88, BOARD_NAME, 1);
 
-    for (int y = 18; y < 42; ++y) {
-        for (int x = 12; x < DISPLAY_WIDTH - 12; ++x) {
-            SetPixel(x, y, true);
-        }
+    size_t black_pixels = 0;
+    for (uint8_t byte : frame_) {
+        black_pixels += 8U - __builtin_popcount(byte);
     }
-
-    DrawCenteredAscii(DISPLAY_WIDTH / 2, 56, status && status[0] ? status : "XIAOZHI", 2);
-    DrawCenteredAscii(DISPLAY_WIDTH / 2, 88, content && content[0] ? content : "EINK OK", 1);
-    DrawCenteredAscii(DISPLAY_WIDTH / 2, 112, BOARD_NAME, 1);
-
-    for (int y = 138; y < 170; ++y) {
-        for (int x = 12; x < DISPLAY_WIDTH - 12; ++x) {
-            if ((((x / 8) + (y / 8)) & 1) == 0) {
-                SetPixel(x, y, true);
-            }
-        }
-    }
+    ESP_LOGI(TAG, "RenderMessage black_pixels=%u", static_cast<unsigned>(black_pixels));
 }
 
 void EinkEpaperDisplay::QueuePresent(const char* status, const char* content) {

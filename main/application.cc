@@ -17,6 +17,10 @@
 #include <arpa/inet.h>
 #include <font_awesome.h>
 
+#if CONFIG_BOARD_TYPE_EINK_C3_BOARD
+#include "boards/eink-c3-board/eink_epaper_display.h"
+#endif
+
 #define TAG "Application"
 
 
@@ -308,6 +312,11 @@ void Application::HandleActivationDoneEvent() {
     std::string message = std::string(Lang::Strings::VERSION) + ota_->GetCurrentVersion();
     display->ShowNotification(message.c_str());
     display->SetChatMessage("system", "");
+#if CONFIG_BOARD_TYPE_EINK_C3_BOARD
+    if (auto* eink_display = static_cast<EinkEpaperDisplay*>(display)) {
+        eink_display->ShowRunningStatusWithDate();
+    }
+#endif
 
     // Release OTA object after activation is complete
     ota_.reset();
