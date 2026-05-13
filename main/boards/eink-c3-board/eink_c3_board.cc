@@ -3,20 +3,34 @@
 #include "application.h"
 #include "button.h"
 #include "config.h"
+#include "eink_ble_service.h"
 #include "eink_epaper_display.h"
+#include "eink_mode_manager.h"
+#include "eink_scene_legacy.h"
 #include "pcf8574_device.h"
 
 #include <driver/i2c_master.h>
 #include <esp_log.h>
+#include <esp_system.h>
 
 static const char* TAG = "EinkC3Board";
+
+EinkBoardMode GetEinkBoardMode() {
+    return EinkModeManager::LoadMode();
+}
+
+bool IsEpaperBleBoardMode() {
+    return GetEinkBoardMode() == EinkBoardMode::EpaperBle;
+}
 
 class EinkC3Board : public WifiBoard {
 private:
     i2c_master_bus_handle_t codec_i2c_bus_ = nullptr;
-    Display* display_ = nullptr;
+    EinkEpaperDisplay* display_ = nullptr;
     Button boot_button_;
     Pcf8574Device* iox_ = nullptr;
+    EinkBleService* ble_service_ = nullptr;
+    EinkBoardMode mode_ = EinkBoardMode::XiaoZhi;
 
     void InitializeCodecI2c() {
         i2c_master_bus_config_t i2c_bus_cfg = {
@@ -36,6 +50,7 @@ private:
 
     void InitializeDisplay() {
         display_ = new EinkEpaperDisplay(DISPLAY_WIDTH, DISPLAY_HEIGHT, iox_);
+        eink_scene_bind_display(display_);
     }
 
     void InitializeIox() {
@@ -44,6 +59,10 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
+            if (mode_ == EinkBoardMode::EpaperBle) {
+                display_->SetModeMessage("EPD BLE", "WAIT MINI APP");
+                return;
+            }
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
@@ -51,15 +70,36 @@ private:
             }
             app.ToggleChatState();
         });
+
+        boot_button_.OnLongPress([this]() {
+            EinkBoardMode next = EinkModeManager::ToggleMode();
+            ESP_LOGW(TAG, "Switch board mode to %s and reboot", next == EinkBoardMode::EpaperBle ? "epaper-ble" : "xiaozhi");
+            esp_restart();
+        });
+    }
+
+    void InitializeMode() {
+        mode_ = EinkModeManager::LoadMode();
+        ESP_LOGI(TAG, "Current board mode: %s", mode_ == EinkBoardMode::EpaperBle ? "epaper-ble" : "xiaozhi");
+    }
+
+    void InitializeBleMode() {
+        if (mode_ != EinkBoardMode::EpaperBle) {
+            return;
+        }
+        ble_service_ = new EinkBleService(display_);
+        ESP_ERROR_CHECK(ble_service_->Start());
     }
 
 public:
     EinkC3Board() : boot_button_(BOOT_BUTTON_GPIO) {
         ESP_LOGI(TAG, "Initialize eink-c3-board");
+        InitializeMode();
         InitializeCodecI2c();
         InitializeIox();
         InitializeDisplay();
         InitializeButtons();
+        InitializeBleMode();
     }
 
     virtual AudioCodec* GetAudioCodec() override {
@@ -80,6 +120,14 @@ public:
 
     virtual Display* GetDisplay() override {
         return display_;
+    }
+
+    virtual void StartNetwork() override {
+        if (mode_ == EinkBoardMode::EpaperBle) {
+            ESP_LOGI(TAG, "Skip XiaoZhi network startup in epaper BLE mode");
+            return;
+        }
+        WifiBoard::StartNetwork();
     }
 };
 

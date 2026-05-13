@@ -120,6 +120,10 @@ void EinkEpaperDisplay::SetupUI() {
     QueuePresent("XIAOZHI", "EINK OK");
 }
 
+void EinkEpaperDisplay::SetModeMessage(const char* status, const char* content) {
+    QueuePresent(status, content);
+}
+
 void EinkEpaperDisplay::InitializePanelPower() {
     if (iox_ == nullptr) {
         ESP_LOGW(TAG, "PCF8574 is null, skip panel power init");
@@ -447,4 +451,21 @@ bool EinkEpaperDisplay::Lock(int timeout_ms) {
 
 void EinkEpaperDisplay::Unlock() {
     mutex_.unlock();
+}
+
+void EinkEpaperDisplay::BeginCanvas() {
+    ClearFrame();
+}
+
+esp_err_t EinkEpaperDisplay::PresentCanvas() {
+    return RefreshFrame();
+}
+
+esp_err_t EinkEpaperDisplay::ShowPackedFrame(const uint8_t* bw_plane, const uint8_t* red_plane) {
+    (void)red_plane;
+    if (bw_plane == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    std::memcpy(frame_.data(), bw_plane, kBufferSize);
+    return RefreshFrame();
 }

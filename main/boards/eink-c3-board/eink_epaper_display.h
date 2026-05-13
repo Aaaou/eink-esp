@@ -25,6 +25,11 @@ public:
     virtual void ClearChatMessages() override;
     virtual void SetPowerSaveMode(bool on) override;
     virtual void SetupUI() override;
+    void SetModeMessage(const char* status, const char* content);
+    void BeginCanvas();
+    esp_err_t PresentCanvas();
+    esp_err_t ShowPackedFrame(const uint8_t* bw_plane, const uint8_t* red_plane);
+    void SetPixel(int x, int y, bool black);
 
 private:
     static constexpr size_t kBufferSize = 104 * 212 / 8;
@@ -59,7 +64,6 @@ private:
     esp_err_t WriteFullPlaneRepeat(uint8_t command, uint8_t value);
     esp_err_t RefreshFrame();
     void ClearFrame();
-    void SetPixel(int x, int y, bool black);
     void DrawCenteredAscii(int center_x, int y, const char* text, int scale);
     void DrawAsciiText(int x, int y, const char* text, int scale);
     void DrawAsciiChar(int x, int y, char c, int scale);

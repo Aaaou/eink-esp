@@ -8,6 +8,9 @@
 #include <freertos/task.h>
 
 #include "application.h"
+#include "board.h"
+#include "boards/eink-c3-board/eink_mode_manager.h"
+#include "display/display.h"
 
 #define TAG "main"
 
@@ -21,6 +24,18 @@ extern "C" void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    if (IsEpaperBleBoardMode()) {
+        ESP_LOGW(TAG, "Starting in epaper BLE mode; XiaoZhi main loop is disabled");
+        auto& board = Board::GetInstance();
+        auto display = board.GetDisplay();
+        if (display != nullptr) {
+            display->SetupUI();
+        }
+        while (true) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+    }
 
     // Initialize and run the application
     auto& app = Application::GetInstance();

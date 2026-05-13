@@ -31,3 +31,25 @@ CONFIG_USE_ESP_WAKE_WORD=y
 If wake word support is needed later, treat it as a separate memory-reduction
 experiment. Start by comparing against `main/boards/esp-hi/config.json`, and
 verify runtime free SRAM after MQTT connection before enabling WakeNet.
+
+## Runtime modes
+
+This board currently has two runtime modes:
+
+### 1. XiaoZhi mode
+
+- Default mode
+- Runs the normal XiaoZhi application stack
+- BOOT single click follows XiaoZhi interaction behavior
+
+### 2. E-paper BLE mode
+
+- Long press BOOT for 3 seconds to switch mode
+- Mode selection is stored in NVS
+- Device reboots after mode switch
+- XiaoZhi application main loop is skipped in this mode
+- Device enters local e-paper BLE control mode
+- Intended use:
+  - calendar rendering
+  - memo rendering
+  - packed frame upload from the WeChat mini program
