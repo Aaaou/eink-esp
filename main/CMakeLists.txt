@@ -4,10 +4,7 @@ idf_component_register(
         "board_bringup.c"
         "board_i2c.c"
         "board_spi.c"
-        "audio_bringup.c"
-        "portal_service.c"
-        "recording_service.c"
-        "storage_service.c"
+        "ble_eink_service.c"
         "eink_scene.c"
         "eink_panel.c"
         "eink_panel_213_uc8151d_z19c.c"
@@ -18,15 +15,8 @@ idf_component_register(
     REQUIRES
         driver
         esp_timer
-        esp_wifi
-        esp_event
-        esp_netif
-        esp_http_server
-        json
-        mbedtls
         nvs_flash
-        spiffs
-        esp_codec_dev
+        bt
 )
 
 if(CONFIG_INK_SCENE_CJK_FONT_PUHUI_14)

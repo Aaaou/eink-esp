@@ -313,6 +313,9 @@ static int draw_landscape_lvgl_glyph(uint8_t *buf, int x, int baseline_y, uint32
     if ((dsc.box_w == 0) || (dsc.box_h == 0)) {
         return advance > 0 ? advance : 4;
     }
+    if (advance < (int)dsc.box_w + dsc.ofs_x + 1) {
+        advance = (int)dsc.box_w + dsc.ofs_x + 1;
+    }
 
     if (dsc.is_placeholder) {
         ESP_LOGW(TAG, "placeholder glyph U+%04" PRIX32, codepoint);
@@ -542,6 +545,7 @@ esp_err_t eink_scene_show_memos(const eink_memo_item_t *items, size_t item_count
         draw_landscape_rect(s_bw, 6, y, 18, 18, true);
         draw_landscape_text_center(s_bw, 15, y + 4, index_text, 1, true);
 
+        ESP_LOGI(TAG, "draw memo %u: %s", (unsigned int)(i + 1), items[i].text);
         draw_landscape_utf8_text(s_bw, 30, y + 15, 140, items[i].text[0] != '\0' ? items[i].text : "-", true);
 
         draw_landscape_circle(s_bw, 191, y + 9, 8, true);
